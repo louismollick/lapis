@@ -40,6 +40,8 @@ deck = genanki.Deck(LAPIS_DECK_ID, "Lapis")
 with open("example_card.csv", "r") as f:
     for line in f:
         fields_content = line.strip().split("\t")
+        if len(fields_content) < len(anki_fields):
+            fields_content.extend([""] * (len(anki_fields) - len(fields_content)))
         deck.add_note(
             genanki.Note(
                 model=lapis, fields=fields_content, tags=["アニメ::小市民シリーズ"]

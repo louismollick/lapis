@@ -1,0 +1,22 @@
+{
+    "name": "lapis-lookup-tool",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "check": "biome check . && tsc --noEmit",
+        "fetch-dictionaries": "node dist/scripts/fetch-dictionaries.js"
+    },
+    "dependencies": {
+        "fake-indexeddb": "^6.0.0"
+    },
+    "devDependencies": {
+        "@types/node": "^22.10.2",
+        "@biomejs/biome": "^1.9.4",
+        "typescript": "^5.7.2"
+    }
+}

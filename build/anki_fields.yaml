@@ -49,3 +49,5 @@
 - name: MiscInfo
   font: Hiragino Sans Pr6N
   size: 15
+- name: KanjiLookupData
+  font: Hiragino Sans Pr6N
