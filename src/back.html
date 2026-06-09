@@ -23,7 +23,7 @@
         <!-- The first row (vocab box+picture) -->
         <div class="def-header">
             <div class="dh-vocab">
-                <div class="vocab">
+                <div class="vocab tappable" onclick="">
                     {{#ExpressionFurigana}}{{furigana:ExpressionFurigana}}{{/ExpressionFurigana}}
                     {{^ExpressionFurigana}}{{Expression}}{{/ExpressionFurigana}}
                 </div>
@@ -621,6 +621,25 @@
         };
     }
 
+    function bindPrimaryActivate(element, handler) {
+        if (!element || typeof handler !== "function") return;
+        element.classList?.add("tappable");
+        if (!element.hasAttribute("onclick")) {
+            element.setAttribute("onclick", "");
+        }
+
+        let lastTouchTime = 0;
+        element.addEventListener("touchend", (event) => {
+            lastTouchTime = Date.now();
+            handler(event);
+        }, { passive: true });
+
+        element.addEventListener("click", (event) => {
+            if (Date.now() - lastTouchTime < 500) return;
+            handler(event);
+        });
+    }
+
     function enhanceKanjiTargets(store) {
         const vocab = document.querySelector(".vocab");
         if (!vocab || !store) return;
@@ -659,7 +678,7 @@
                     button.className = "lapis-lookup-kanji-target tappable";
                     button.dataset.kanji = character;
                     button.textContent = character;
-                    button.addEventListener("click", (event) => {
+                    bindPrimaryActivate(button, (event) => {
                         event.stopPropagation();
                         openKanjiPopover(store, character);
                     });
@@ -711,7 +730,7 @@
             const button = document.createElement("button");
             button.type = "button";
             button.className = "lapis-lookup-word-row tappable";
-            button.addEventListener("click", () => openWordPopover(store, kanjiItem.char, relatedWord.term));
+            bindPrimaryActivate(button, () => openWordPopover(store, kanjiItem.char, relatedWord.term));
 
             const left = document.createElement("div");
             left.className = "lapis-lookup-word-main";
@@ -790,8 +809,8 @@
         const kanjiBack = document.getElementById("lapis-lookup-kanji-back");
         const wordBack = document.getElementById("lapis-lookup-word-back");
 
-        kanjiBack?.addEventListener("click", () => closeLookupOverlay(store));
-        wordBack?.addEventListener("click", () => {
+        bindPrimaryActivate(kanjiBack, () => closeLookupOverlay(store));
+        bindPrimaryActivate(wordBack, () => {
             if (!store.currentKanji) {
                 closeLookupOverlay(store);
                 return;
