@@ -1,0 +1,6 @@
+.cache/
+tools/lookup/node_modules/
+tools/lookup/dist/
+.DS_Store
+__pycache__/
+*.log

@@ -23,7 +23,7 @@
         <!-- The first row (vocab box+picture) -->
         <div class="def-header">
             <div class="dh-vocab">
-                <div class="vocab">
+                <div class="vocab tappable" onclick="">
                     {{#ExpressionFurigana}}{{furigana:ExpressionFurigana}}{{/ExpressionFurigana}}
                     {{^ExpressionFurigana}}{{Expression}}{{/ExpressionFurigana}}
                 </div>
@@ -108,6 +108,32 @@
             {{/Tags}}
         </div>
     </footer>
+
+    <script id="lapis-lookup-data" type="application/json">{{text:KanjiLookupData}}</script>
+    <!-- lapis-lookup-v1 -->
+    <div id="lapis-lookup-overlay" class="lapis-lookup-overlay hidden">
+        <section id="kanji-popover-view" class="lapis-lookup-sheet hidden">
+            <div class="lapis-lookup-sheet-header">
+                <button type="button" id="lapis-lookup-kanji-back" class="lapis-lookup-back tappable">Back</button>
+                <div class="lapis-lookup-sheet-title-wrap">
+                    <div id="lapis-lookup-kanji-char" class="lapis-lookup-sheet-title"></div>
+                    <div id="lapis-lookup-kanji-subtitle" class="lapis-lookup-sheet-subtitle"></div>
+                </div>
+            </div>
+            <div id="lapis-lookup-kanji-body" class="lapis-lookup-sheet-body"></div>
+        </section>
+
+        <section id="word-popover-view" class="lapis-lookup-sheet hidden">
+            <div class="lapis-lookup-sheet-header">
+                <button type="button" id="lapis-lookup-word-back" class="lapis-lookup-back tappable">Back</button>
+                <div class="lapis-lookup-sheet-title-wrap">
+                    <div id="lapis-lookup-word-title" class="lapis-lookup-sheet-title"></div>
+                    <div id="lapis-lookup-word-subtitle" class="lapis-lookup-sheet-subtitle"></div>
+                </div>
+            </div>
+            <div id="lapis-lookup-word-body" class="lapis-lookup-sheet-body"></div>
+        </section>
+    </div>
 
     <!------- Image modal --------->
     <div id="modal" class="tappable"></div>
@@ -487,14 +513,20 @@
 
     // Sets the height of dhVocab, dhImage, defHeader as a whole
     function setDHHeight() {
-        var dhVocab = document.querySelector('.dh-vocab');
-        var dhImage = document.querySelector('.dh-image img');
-        var defHeader = document.querySelector('.def-header');
+        const dhVocab = document.querySelector('.dh-vocab');
+        const dhImage = document.querySelector('.dh-image img');
 
-        if (dhVocab && dhImage) {
-            var dhVocabHeight = dhVocab.offsetHeight;
+        if (!dhVocab || !dhImage) return;
+
+        // After an image is resized to fit, the vocab height may change due to text wrapping differences.
+        // The image then needs resized again, but the process should stabilize within a couple iterations.
+        let previousHeight = -1;
+        for (let i = 0; i < 3; i++) {
+            const dhVocabHeight = dhVocab.offsetHeight;
+            if (dhVocabHeight === previousHeight) break;
+
+            previousHeight = dhVocabHeight
             dhImage.style.maxHeight = `${dhVocabHeight}px`;
-            defHeader.style.maxHeight = `${dhVocabHeight}px`;
         }
     }
 
@@ -555,6 +587,255 @@
         }
     }
 
+    function parseLookupData() {
+        const dataNode = document.getElementById("lapis-lookup-data");
+        if (!dataNode) return null;
+        const text = dataNode.textContent?.trim();
+        if (!text) return null;
+        try {
+            return JSON.parse(text);
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    function isLookupKanji(character) {
+        return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(character);
+    }
+
+    function createLookupStore(lookupData) {
+        if (!lookupData || !Array.isArray(lookupData.kanji)) return null;
+
+        const kanjiMap = new Map();
+        for (const item of lookupData.kanji) {
+            if (!item || !item.char) continue;
+            kanjiMap.set(item.char, item);
+        }
+
+        return {
+            lookupData,
+            kanjiMap,
+            history: [],
+            currentKanji: null,
+            currentWord: null,
+        };
+    }
+
+    function bindPrimaryActivate(element, handler) {
+        if (!element || typeof handler !== "function") return;
+        element.classList?.add("tappable");
+        if (!element.hasAttribute("onclick")) {
+            element.setAttribute("onclick", "");
+        }
+
+        let lastTouchTime = 0;
+        element.addEventListener("touchend", (event) => {
+            lastTouchTime = Date.now();
+            handler(event);
+        }, { passive: true });
+
+        element.addEventListener("click", (event) => {
+            if (Date.now() - lastTouchTime < 500) return;
+            handler(event);
+        });
+    }
+
+    function enhanceKanjiTargets(store) {
+        const vocab = document.querySelector(".vocab");
+        if (!vocab || !store) return;
+
+        const targetChars = new Set(store.kanjiMap.keys());
+        if (targetChars.size === 0) return;
+
+        const textNodes = [];
+        const walker = document.createTreeWalker(vocab, NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+                const parentTag = node.parentElement?.tagName;
+                if (parentTag === "RT" || parentTag === "RP") {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            },
+        });
+
+        let currentNode = walker.nextNode();
+        while (currentNode) {
+            textNodes.push(currentNode);
+            currentNode = walker.nextNode();
+        }
+
+        for (const node of textNodes) {
+            const text = node.textContent || "";
+            if (![...text].some(character => targetChars.has(character) && isLookupKanji(character))) {
+                continue;
+            }
+
+            const fragment = document.createDocumentFragment();
+            for (const character of text) {
+                if (targetChars.has(character) && isLookupKanji(character)) {
+                    const button = document.createElement("button");
+                    button.type = "button";
+                    button.className = "lapis-lookup-kanji-target tappable";
+                    button.dataset.kanji = character;
+                    button.textContent = character;
+                    bindPrimaryActivate(button, (event) => {
+                        event.stopPropagation();
+                        openKanjiPopover(store, character);
+                    });
+                    fragment.appendChild(button);
+                } else {
+                    fragment.appendChild(document.createTextNode(character));
+                }
+            }
+            node.parentNode.replaceChild(fragment, node);
+        }
+    }
+
+    function showLookupSheet(sheetId) {
+        const overlay = document.getElementById("lapis-lookup-overlay");
+        const sheets = document.querySelectorAll(".lapis-lookup-sheet");
+        sheets.forEach(sheet => sheet.classList.add("hidden"));
+
+        if (!overlay || !sheetId) {
+            overlay?.classList.add("hidden");
+            return;
+        }
+
+        overlay.classList.remove("hidden");
+        document.getElementById(sheetId)?.classList.remove("hidden");
+    }
+
+    function closeLookupOverlay(store) {
+        if (!store) return;
+        store.history = [];
+        store.currentKanji = null;
+        store.currentWord = null;
+        showLookupSheet(null);
+    }
+
+    function renderKanjiPopover(store, kanjiItem) {
+        const title = document.getElementById("lapis-lookup-kanji-char");
+        const subtitle = document.getElementById("lapis-lookup-kanji-subtitle");
+        const body = document.getElementById("lapis-lookup-kanji-body");
+        if (!title || !subtitle || !body) return;
+
+        title.textContent = kanjiItem.char;
+        subtitle.textContent = `${(kanjiItem.relatedWords || []).length} related words`;
+        body.innerHTML = "";
+
+        const list = document.createElement("div");
+        list.className = "lapis-lookup-word-list";
+
+        for (const relatedWord of kanjiItem.relatedWords || []) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "lapis-lookup-word-row tappable";
+            bindPrimaryActivate(button, () => openWordPopover(store, kanjiItem.char, relatedWord.term));
+
+            const left = document.createElement("div");
+            left.className = "lapis-lookup-word-main";
+            left.innerHTML = `
+                <span class="lapis-lookup-word-term">${relatedWord.term}</span>
+                ${relatedWord.reading ? `<span class="lapis-lookup-word-reading">${relatedWord.reading}</span>` : ""}
+            `;
+
+            const right = document.createElement("div");
+            right.className = "lapis-lookup-word-meta";
+            if (relatedWord.frequency?.value !== null && relatedWord.frequency?.value !== undefined) {
+                right.innerHTML = `
+                    <span class="lapis-lookup-word-frequency">${relatedWord.frequency.value}</span>
+                    <span class="lapis-lookup-word-frequency-source">${relatedWord.frequency.source || ""}</span>
+                `;
+            }
+
+            button.appendChild(left);
+            button.appendChild(right);
+            list.appendChild(button);
+        }
+
+        if (!list.children.length) {
+            body.innerHTML = `<div class="lapis-lookup-empty">No related words available.</div>`;
+            return;
+        }
+
+        body.appendChild(list);
+    }
+
+    function renderWordPopover(store, kanjiItem, relatedWord) {
+        const title = document.getElementById("lapis-lookup-word-title");
+        const subtitle = document.getElementById("lapis-lookup-word-subtitle");
+        const body = document.getElementById("lapis-lookup-word-body");
+        if (!title || !subtitle || !body) return;
+
+        title.textContent = relatedWord.term;
+        const subtitleParts = [];
+        if (relatedWord.reading) subtitleParts.push(relatedWord.reading);
+        if (relatedWord.frequency?.value !== null && relatedWord.frequency?.value !== undefined) {
+            subtitleParts.push(`${relatedWord.frequency.source || "Frequency"}: ${relatedWord.frequency.value}`);
+        }
+        subtitle.textContent = subtitleParts.join(" | ");
+
+        body.innerHTML = "";
+        const detail = document.createElement("div");
+        detail.className = "lapis-lookup-word-detail";
+        detail.innerHTML = relatedWord.entryHtml || `<div class="lapis-lookup-empty">No dictionary entry available for ${relatedWord.term}.</div>`;
+        body.appendChild(detail);
+    }
+
+    function openKanjiPopover(store, kanji) {
+        const kanjiItem = store?.kanjiMap.get(kanji);
+        if (!kanjiItem) return;
+        store.currentKanji = kanji;
+        store.currentWord = null;
+        store.history = ["kanji"];
+        renderKanjiPopover(store, kanjiItem);
+        showLookupSheet("kanji-popover-view");
+    }
+
+    function openWordPopover(store, kanji, term) {
+        const kanjiItem = store?.kanjiMap.get(kanji);
+        const relatedWord = kanjiItem?.relatedWords?.find(item => item.term === term);
+        if (!kanjiItem || !relatedWord) return;
+
+        store.currentKanji = kanji;
+        store.currentWord = term;
+        store.history = ["kanji", "word"];
+        renderWordPopover(store, kanjiItem, relatedWord);
+        showLookupSheet("word-popover-view");
+    }
+
+    function wireLookupNavigation(store) {
+        if (!store) return;
+        const kanjiBack = document.getElementById("lapis-lookup-kanji-back");
+        const wordBack = document.getElementById("lapis-lookup-word-back");
+
+        bindPrimaryActivate(kanjiBack, () => closeLookupOverlay(store));
+        bindPrimaryActivate(wordBack, () => {
+            if (!store.currentKanji) {
+                closeLookupOverlay(store);
+                return;
+            }
+            const kanjiItem = store.kanjiMap.get(store.currentKanji);
+            if (!kanjiItem) {
+                closeLookupOverlay(store);
+                return;
+            }
+            store.history = ["kanji"];
+            renderKanjiPopover(store, kanjiItem);
+            showLookupSheet("kanji-popover-view");
+        });
+    }
+
+    function initializeLookupOverlay() {
+        const lookupData = parseLookupData();
+        const store = createLookupStore(lookupData);
+        if (!store) return;
+
+        enhanceKanjiTargets(store);
+        wireLookupNavigation(store);
+        closeLookupOverlay(store);
+    }
+
     // Initialize all functions!!!
     function initialize() {
         addAudioButtons();
@@ -567,6 +848,7 @@
         setDHHeight();
         hideCorrectDefinition();
         movePrimaryDicts();
+        initializeLookupOverlay();
     }
 
     initialize();

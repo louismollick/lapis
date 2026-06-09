@@ -95,6 +95,8 @@ To use Lapis, first download the example deck from [Releases](https://github.com
 
 In `MainDefinition`, what you get will depend on the version of JMdict or Jitendex you have. If you decide you do not want to use any bilingual dictionary, simply use your main monolingual dictionary there. **Note:** Ensure that the `SentenceFurigana` field is empty, as Yomitan may automatically insert `{sentence-furigana}`. We strongly recommend **against** using this handlebar, as it does not preserve bold formatting. Additionally, if the `Sentence` field is updated, the furigana field will not be adjusted accordingly. Instead, we recommend using [AJT Japanese](docs/anki_setup.md).
 
+If you want the kanji drilldown addon added in this repo, see [Lapis Lookup setup](docs/kanji_lookup_setup.md).
+
 ## How to update Lapis
 
 In order to update Lapis (provided you're on Anki 23.10+, the supported versions), simply import the newer APKG. Make sure to copy the changes you made to variables in the styling before updating, as the update process will reset everything to default.

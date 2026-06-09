@@ -1,0 +1,10 @@
+{
+  "lookup_repo_root": "/Users/mollicl/personal/lapis",
+  "definition_dictionary_names": [
+    "Jitendex"
+  ],
+  "frequency_dictionary_names": [
+    "JPDB"
+  ],
+  "max_words_per_kanji": 12
+}
