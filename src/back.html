@@ -518,14 +518,13 @@
 
         if (!dhVocab || !dhImage) return;
 
-        // After an image is resized to fit, the vocab height may change due to text wrapping differences.
-        // The image then needs resized again, but the process should stabilize within a couple iterations.
+        // A resized image can slightly change wrapping, so remeasure until the max height stabilizes.
         let previousHeight = -1;
         for (let i = 0; i < 3; i++) {
             const dhVocabHeight = dhVocab.offsetHeight;
             if (dhVocabHeight === previousHeight) break;
 
-            previousHeight = dhVocabHeight
+            previousHeight = dhVocabHeight;
             dhImage.style.maxHeight = `${dhVocabHeight}px`;
         }
     }
@@ -613,11 +612,8 @@
         }
 
         return {
-            lookupData,
             kanjiMap,
-            history: [],
             currentKanji: null,
-            currentWord: null,
         };
     }
 
@@ -707,9 +703,7 @@
 
     function closeLookupOverlay(store) {
         if (!store) return;
-        store.history = [];
         store.currentKanji = null;
-        store.currentWord = null;
         showLookupSheet(null);
     }
 
@@ -786,8 +780,6 @@
         const kanjiItem = store?.kanjiMap.get(kanji);
         if (!kanjiItem) return;
         store.currentKanji = kanji;
-        store.currentWord = null;
-        store.history = ["kanji"];
         renderKanjiPopover(store, kanjiItem);
         showLookupSheet("kanji-popover-view");
     }
@@ -798,8 +790,6 @@
         if (!kanjiItem || !relatedWord) return;
 
         store.currentKanji = kanji;
-        store.currentWord = term;
-        store.history = ["kanji", "word"];
         renderWordPopover(store, kanjiItem, relatedWord);
         showLookupSheet("word-popover-view");
     }
@@ -820,7 +810,6 @@
                 closeLookupOverlay(store);
                 return;
             }
-            store.history = ["kanji"];
             renderKanjiPopover(store, kanjiItem);
             showLookupSheet("kanji-popover-view");
         });
