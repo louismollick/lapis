@@ -189,6 +189,9 @@ async function generateLapisFields(
         enabledDictionaryMap: runtime.termDictionaryMap,
         dictionaries,
         dictionaryInfo: runtime.dictionaryInfo,
+        additionalTemplates: buildLapisAdditionalTemplates(
+            runtime.dictionaryInfo,
+        ),
         cardFormat: {
             deck: "Lapis",
             model: "Lapis+Lookup",
@@ -221,7 +224,7 @@ function buildLapisFieldTemplates(
         ExpressionReading: "{reading}",
         ExpressionAudio: "{audio}",
         SelectionText: "{popup-selection-text}",
-        MainDefinition: buildMainDefinitionTemplate(dictionaryInfo),
+        MainDefinition: "{lapis-main-definition}",
         Sentence: "{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}",
         Glossary: "{glossary}",
         PitchPosition: "{pitch-accent-positions}",
@@ -232,7 +235,7 @@ function buildLapisFieldTemplates(
     };
 }
 
-function buildMainDefinitionTemplate(
+function buildLapisAdditionalTemplates(
     dictionaryInfo: DictionarySummary[],
 ): string {
     const titleMap = new Map(
@@ -245,10 +248,45 @@ function buildMainDefinitionTemplate(
         titleMap.get("jitendex") ?? "",
         titleMap.get("jmdict") ?? "",
     ].filter(Boolean);
-    const templates = preferredTitles.map(
-        (title) => `{single-glossary-${toKebabCase(title)}-brief}`,
-    );
-    return templates.join("") || "{glossary-first-brief}";
+    const preferredBlocks = preferredTitles
+        .map((title) => buildPreferredDefinitionBlock(title))
+        .join("\n");
+
+    return `
+{{#*inline "lapis-main-definition"}}
+    {{~#scope~}}
+        {{~set "rendered" false~}}
+        {{~#if (op "===" definition.type "term")~}}
+            {{~#if definition.glossary.[0]~}}
+                {{{formatGlossaryPlain definition.dictionary definition.glossary.[0]}}}
+                {{~set "rendered" true~}}
+            {{~/if~}}
+        {{~else if (op "||" (op "===" definition.type "termGrouped") (op "===" definition.type "termMerged"))~}}
+${preferredBlocks}
+            {{~#unless (get "rendered")~}}
+                {{~#with definition.definitions.[0]~}}
+                    {{~#if glossary.[0]~}}
+                        {{{formatGlossaryPlain dictionary glossary.[0]}}}
+                    {{~/if~}}
+                {{~/with~}}
+            {{~/unless~}}
+        {{~/if~}}
+    {{~/scope~}}
+{{/inline}}
+`.trim();
+}
+
+function buildPreferredDefinitionBlock(title: string): string {
+    const escapedTitle = escapeHandlebarsString(title);
+    return `
+            {{~#each definition.definitions~}}
+                {{~#if (op "&&" (op "!" (get "rendered")) (op "||" (op "===" dictionary "${escapedTitle}") (op "===" dictionaryAlias "${escapedTitle}")))~}}
+                    {{~#if glossary.[0]~}}
+                        {{{formatGlossaryPlain dictionary glossary.[0]}}}
+                        {{~set "rendered" true~}}
+                    {{~/if~}}
+                {{~/if~}}
+            {{~/each~}}`.trimEnd();
 }
 
 function normalizeDictionaryTitle(value: string): string {
@@ -269,6 +307,10 @@ function toKebabCase(value: string): string {
         .replace(/--+/g, "-")
         .replace(/^-|-$/g, "")
         .toLowerCase();
+}
+
+function escapeHandlebarsString(value: string): string {
+    return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
 async function resolveRelatedWord(
