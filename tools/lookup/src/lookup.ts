@@ -246,9 +246,9 @@ function buildMainDefinitionTemplate(
         titleMap.get("jmdict") ?? "",
     ].filter(Boolean);
     const templates = preferredTitles.map(
-        (title) => `{single-glossary-${toKebabCase(title)}-brief}`,
+        (title) => `{single-glossary-${toKebabCase(title)}}`,
     );
-    return templates.join("") || "{glossary-first-brief}";
+    return templates.join("") || "{glossary-first}";
 }
 
 function normalizeDictionaryTitle(value: string): string {
