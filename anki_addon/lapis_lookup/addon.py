@@ -84,8 +84,8 @@ def setup_and_backfill_selected_notes(browser: Browser) -> None:
 
     QueryOp(
         parent=browser,
-        op=lambda col: run_setup_and_backfill(col, note_ids, config),
-        success=lambda summary: on_backfill_success(browser, summary),
+        op=lambda col: run_lookup_only(col, note_ids, config),
+        success=lambda results: on_lookup_success(browser, note_ids, results),
     ).with_progress("Setting up lookup model and backfilling notes...").run_in_background()
 
 
@@ -117,8 +117,11 @@ def diagnose_selected_notes(browser: Browser) -> None:
     showInfo("\n".join(lines).strip(), parent=browser)
 
 
-def run_setup_and_backfill(col: Any, note_ids: Sequence[int], config: dict[str, Any]) -> BackfillSummary:
-    results = run_lookup_cli(config, note_ids, col)
+def run_lookup_only(col: Any, note_ids: Sequence[int], config: dict[str, Any]) -> dict[str, Any]:
+    return run_lookup_cli(config, note_ids, col)
+
+
+def apply_backfill_results(col: Any, results: dict[str, Any]) -> BackfillSummary:
     warnings: list[str] = []
     processed = 0
     converted = 0
@@ -168,6 +171,15 @@ def run_setup_and_backfill(col: Any, note_ids: Sequence[int], config: dict[str, 
         skipped=skipped,
         warnings=warnings,
     )
+
+
+def on_lookup_success(browser: Browser, note_ids: Sequence[int], results: dict[str, Any]) -> None:
+    try:
+        summary = apply_backfill_results(mw.col, results)
+    except Exception as error:
+        showWarning(str(error), parent=browser)
+        return
+    on_backfill_success(browser, summary)
 
 
 def on_backfill_success(browser: Browser, summary: BackfillSummary) -> None:
