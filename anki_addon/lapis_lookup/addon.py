@@ -525,6 +525,8 @@ def ensure_node_ready(tool_root: Path, cli_path: Path, fetch_path: Path) -> None
         install_command = [npm, "ci"] if (tool_root / "package-lock.json").exists() else [npm, "install"]
         run_command(install_command, tool_root)
         run_command([npm, "run", "build"], tool_root)
+    elif needs_tool_rebuild(tool_root, cli_path, fetch_path):
+        run_command([npm, "run", "build"], tool_root)
 
     cache_dir = tool_root.parent.parent / ".cache" / "yomitan-dicts"
     required_archives = {
@@ -537,6 +539,33 @@ def ensure_node_ready(tool_root: Path, cli_path: Path, fetch_path: Path) -> None
         if not fetch_path.exists():
             run_command([npm, "run", "build"], tool_root)
         run_command([node, str(fetch_path)], tool_root)
+
+
+def needs_tool_rebuild(tool_root: Path, cli_path: Path, fetch_path: Path) -> bool:
+    outputs = [path for path in (cli_path, fetch_path) if path.exists()]
+    if len(outputs) < 2:
+        return True
+
+    oldest_output_mtime = min(path.stat().st_mtime for path in outputs)
+    source_roots = [
+        tool_root / "src",
+        tool_root / "scripts",
+    ]
+    source_files = [
+        tool_root / "package.json",
+        tool_root / "package-lock.json",
+        tool_root / "tsconfig.json",
+    ]
+
+    for root in source_roots:
+        if root.exists():
+            source_files.extend(path for path in root.rglob("*.ts") if path.is_file())
+
+    for path in source_files:
+        if path.exists() and path.stat().st_mtime > oldest_output_mtime:
+            return True
+
+    return False
 
 
 def run_command(command: Sequence[str], cwd: Path) -> None:
