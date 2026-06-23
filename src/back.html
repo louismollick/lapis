@@ -109,6 +109,7 @@
         </div>
     </footer>
 
+    <!-- lapis-lookup-v1:markup:start -->
     <script id="lapis-lookup-data" type="application/json">{{text:KanjiLookupData}}</script>
     <!-- lapis-lookup-v1 -->
     <div id="lapis-lookup-overlay" class="lapis-lookup-overlay hidden">
@@ -134,6 +135,7 @@
             <div id="lapis-lookup-word-body" class="lapis-lookup-sheet-body"></div>
         </section>
     </div>
+    <!-- lapis-lookup-v1:markup:end -->
 
     <!------- Image modal --------->
     <div id="modal" class="tappable"></div>
@@ -518,14 +520,13 @@
 
         if (!dhVocab || !dhImage) return;
 
-        // After an image is resized to fit, the vocab height may change due to text wrapping differences.
-        // The image then needs resized again, but the process should stabilize within a couple iterations.
+        // A resized image can slightly change wrapping, so remeasure until the max height stabilizes.
         let previousHeight = -1;
         for (let i = 0; i < 3; i++) {
             const dhVocabHeight = dhVocab.offsetHeight;
             if (dhVocabHeight === previousHeight) break;
 
-            previousHeight = dhVocabHeight
+            previousHeight = dhVocabHeight;
             dhImage.style.maxHeight = `${dhVocabHeight}px`;
         }
     }
@@ -587,6 +588,7 @@
         }
     }
 
+    // lapis-lookup-v1:script:start
     function parseLookupData() {
         const dataNode = document.getElementById("lapis-lookup-data");
         if (!dataNode) return null;
@@ -613,11 +615,8 @@
         }
 
         return {
-            lookupData,
             kanjiMap,
-            history: [],
             currentKanji: null,
-            currentWord: null,
         };
     }
 
@@ -645,7 +644,7 @@
         if (!vocab || !store) return;
 
         const targetChars = new Set(store.kanjiMap.keys());
-        if (targetChars.size === 0) return;
+        if (!targetChars.size) return;
 
         const textNodes = [];
         const walker = document.createTreeWalker(vocab, NodeFilter.SHOW_TEXT, {
@@ -666,23 +665,22 @@
 
         for (const node of textNodes) {
             const text = node.textContent || "";
-            if (![...text].some(character => targetChars.has(character) && isLookupKanji(character))) {
+            if (![...text].some((character) => targetChars.has(character) && isLookupKanji(character))) {
                 continue;
             }
 
             const fragment = document.createDocumentFragment();
             for (const character of text) {
                 if (targetChars.has(character) && isLookupKanji(character)) {
-                    const button = document.createElement("button");
-                    button.type = "button";
-                    button.className = "lapis-lookup-kanji-target tappable";
-                    button.dataset.kanji = character;
-                    button.textContent = character;
-                    bindPrimaryActivate(button, (event) => {
+                    const target = document.createElement("span");
+                    target.className = "lapis-lookup-kanji-target tappable";
+                    target.dataset.kanji = character;
+                    target.textContent = character;
+                    bindPrimaryActivate(target, (event) => {
                         event.stopPropagation();
                         openKanjiPopover(store, character);
                     });
-                    fragment.appendChild(button);
+                    fragment.appendChild(target);
                 } else {
                     fragment.appendChild(document.createTextNode(character));
                 }
@@ -707,9 +705,7 @@
 
     function closeLookupOverlay(store) {
         if (!store) return;
-        store.history = [];
         store.currentKanji = null;
-        store.currentWord = null;
         showLookupSheet(null);
     }
 
@@ -786,8 +782,6 @@
         const kanjiItem = store?.kanjiMap.get(kanji);
         if (!kanjiItem) return;
         store.currentKanji = kanji;
-        store.currentWord = null;
-        store.history = ["kanji"];
         renderKanjiPopover(store, kanjiItem);
         showLookupSheet("kanji-popover-view");
     }
@@ -798,8 +792,6 @@
         if (!kanjiItem || !relatedWord) return;
 
         store.currentKanji = kanji;
-        store.currentWord = term;
-        store.history = ["kanji", "word"];
         renderWordPopover(store, kanjiItem, relatedWord);
         showLookupSheet("word-popover-view");
     }
@@ -820,7 +812,6 @@
                 closeLookupOverlay(store);
                 return;
             }
-            store.history = ["kanji"];
             renderKanjiPopover(store, kanjiItem);
             showLookupSheet("kanji-popover-view");
         });
@@ -835,6 +826,7 @@
         wireLookupNavigation(store);
         closeLookupOverlay(store);
     }
+    // lapis-lookup-v1:script:end
 
     // Initialize all functions!!!
     function initialize() {

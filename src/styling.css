@@ -1146,6 +1146,11 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
   }
 }
 
+/* lapis-lookup-v1:start */
+.hidden {
+  display: none !important;
+}
+
 /* Lookup overlay */
 .lapis-lookup-kanji-target {
   appearance: none;
@@ -1156,7 +1161,6 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
   color: inherit;
   font: inherit;
   cursor: pointer;
-  border-bottom: 0.08em solid var(--bold);
 }
 
 .lapis-lookup-overlay {
@@ -1194,6 +1198,7 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
 
 .lapis-lookup-sheet-title-wrap {
   flex: 1;
+  min-width: 0;
   text-align: left;
 }
 
@@ -1228,6 +1233,8 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
   justify-content: space-between;
   gap: 16px;
   width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
   border: 0;
   border-radius: 18px;
   padding: 14px 16px;
@@ -1245,13 +1252,20 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
 }
 
 .lapis-lookup-word-meta {
+  flex: 0 0 auto;
   align-items: flex-end;
   text-align: right;
+}
+
+.lapis-lookup-word-main {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .lapis-lookup-word-term {
   font-family: var(--font-serif);
   font-size: 1.2em;
+  overflow-wrap: anywhere;
 }
 
 .lapis-lookup-word-reading,
@@ -1259,6 +1273,7 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
   color: var(--fg-subtle);
   font-family: var(--font-sans);
   font-size: 0.85em;
+  overflow-wrap: anywhere;
 }
 
 .lapis-lookup-word-frequency {
@@ -1273,6 +1288,74 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
   background: var(--bg-elevated);
   box-shadow: inset 0 0 0 1px var(--bg-inset);
   overflow-wrap: anywhere;
+  text-align: left;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.lapis-lookup-word-detail,
+.lapis-lookup-word-detail * {
+  text-align: left;
+}
+
+.lapis-lookup-word-detail .yomitan-glossary ul,
+.lapis-lookup-word-detail .yomitan-glossary ol {
+  display: block;
+  margin: 0 0 0.75em;
+  padding-left: 1.25em !important;
+}
+
+.lapis-lookup-word-detail .yomitan-glossary li {
+  display: list-item;
+}
+
+.lapis-lookup-word-detail .yomitan-glossary ul[data-sc-content="glossary"] {
+  list-style: disc;
+}
+
+.lapis-lookup-word-detail .yomitan-glossary ul[data-sc-content="glossary"] > li::before,
+.lapis-lookup-word-detail .yomitan-glossary ul[data-sc-content="glossary"] > li::after {
+  content: none !important;
+}
+
+.lapis-lookup-word-detail .yomitan-glossary [data-sc-content="extra-info"] > div,
+.lapis-lookup-word-detail .yomitan-glossary [data-sc-content="example-sentence"],
+.lapis-lookup-word-detail .yomitan-glossary [data-sc-content="example-sentence-a"],
+.lapis-lookup-word-detail .yomitan-glossary [data-sc-content="example-sentence-b"],
+.lapis-lookup-word-detail .yomitan-glossary [data-sc-content="attribution"] {
+  display: block;
+}
+
+.lapis-lookup-word-detail .yomitan-glossary [data-sc-content="attribution-footnote"] {
+  display: inline;
+}
+
+.lapis-lookup-word-detail p,
+.lapis-lookup-word-detail ul,
+.lapis-lookup-word-detail ol,
+.lapis-lookup-word-detail dl,
+.lapis-lookup-word-detail blockquote,
+.lapis-lookup-word-detail section,
+.lapis-lookup-word-detail figure,
+.lapis-lookup-word-detail table {
+  margin: 0 0 0.75em;
+}
+
+.lapis-lookup-word-detail li {
+  margin: 0.2em 0 0.2em 1.2em;
+}
+
+.lapis-lookup-word-detail br {
+  display: block;
+  content: "";
+  margin-top: 0.35em;
+}
+
+.vocab,
+.vocab ruby,
+.vocab ruby rb,
+.vocab ruby rt {
+  cursor: pointer;
 }
 
 .lapis-lookup-empty {
@@ -1307,3 +1390,4 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
     font-size: 0.78em;
     font-weight: 600;
 }
+/* lapis-lookup-v1:end */
