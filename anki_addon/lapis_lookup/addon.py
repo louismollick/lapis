@@ -151,11 +151,11 @@ def apply_backfill_results(col: Any, results: dict[str, Any]) -> BackfillSummary
             note = col.get_note(note_id)
             write_generated_fields(note, item.get("generatedFields", {}))
             converted += 1
-        elif LOOKUP_FIELD_NAME not in note:
+        elif not note_has_field(note, LOOKUP_FIELD_NAME):
             ensure_lookup_model_for_notes(col, [note_id])
             note = col.get_note(note_id)
 
-        if LOOKUP_FIELD_NAME not in note or "payload" not in item:
+        if not note_has_field(note, LOOKUP_FIELD_NAME) or "payload" not in item:
             skipped += 1
             warnings.append(f"Skipped note {note_id}: lookup payload unavailable after setup.")
             continue
@@ -252,6 +252,11 @@ def ensure_lookup_field(col: Any, model: dict[str, Any]) -> None:
 
     field = col.models.new_field(LOOKUP_FIELD_NAME)
     col.models.add_field(model, field)
+
+
+def note_has_field(note: Any, field_name: str) -> bool:
+    model = note.note_type()
+    return any(field["name"] == field_name for field in model["flds"])
 
 
 def apply_lookup_assets(model: dict[str, Any]) -> bool:
@@ -432,7 +437,7 @@ def get_model_by_name(col: Any, name: str) -> dict[str, Any] | None:
 
 def write_generated_fields(note: Any, generated_fields: dict[str, str]) -> None:
     for field_name, value in generated_fields.items():
-        if field_name in note:
+        if note_has_field(note, field_name):
             note[field_name] = value
 
 
