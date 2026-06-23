@@ -7,9 +7,11 @@ import {
 import {
     buildDictionaryStylesMap,
     buildKanjiDictionaryMap,
+    buildSingleGlossaryMarker,
     buildTermDictionaryMap,
     ensureDictionaryArchivesPresent,
     importSuggestedDictionaries,
+    normalizeDictionaryTitle,
     selectPreferredDictionaryTitle,
     selectPreferredFrequency,
 } from "./dictionaries.js";
@@ -179,23 +181,39 @@ async function generateLapisFields(
     expression: string,
     runtime: LookupRuntime,
 ): Promise<BuildAnkiNoteResult> {
-    const dictionaries = runtime.dictionaryInfo.map((dictionary) => ({
-        name: dictionary.title,
-        enabled: true,
-    }));
+    return runtime.core.buildAnkiNoteFromTerm(
+        buildLegacyLapisNoteInput(
+            expression,
+            runtime.dictionaryInfo,
+            runtime.termDictionaryMap,
+            runtime.dictionaryStylesMap,
+        ),
+    );
+}
 
-    return runtime.core.buildAnkiNoteFromTerm({
+export function buildLegacyLapisNoteInput(
+    expression: string,
+    dictionaryInfo: DictionarySummary[],
+    termDictionaryMap: ReturnType<typeof buildTermDictionaryMap>,
+    dictionaryStylesMap: Map<string, string>,
+): Parameters<YomitanCoreLike["buildAnkiNoteFromTerm"]>[0] {
+    return {
         term: expression,
-        enabledDictionaryMap: runtime.termDictionaryMap,
-        dictionaries,
-        dictionaryInfo: runtime.dictionaryInfo,
+        enabledDictionaryMap: termDictionaryMap,
+        dictionaries: dictionaryInfo.map((dictionary) => ({
+            name: dictionary.title,
+            enabled: true,
+        })),
+        dictionaryInfo,
+        resultOutputMode: "group",
+        dictionaryStylesMap,
         cardFormat: {
             deck: "Lapis",
             model: "Lapis+Lookup",
             fields: Object.fromEntries(
-                Object.entries(
-                    buildLapisFieldTemplates(runtime.dictionaryInfo),
-                ).map(([fieldName, value]) => [fieldName, { value }]),
+                Object.entries(buildLapisFieldTemplates(dictionaryInfo)).map(
+                    ([fieldName, value]) => [fieldName, { value }],
+                ),
             ),
         },
         context: {
@@ -209,7 +227,7 @@ async function generateLapisFields(
             deinflect: true,
             removeNonJapaneseCharacters: false,
         },
-    });
+    };
 }
 
 function buildLapisFieldTemplates(
@@ -245,30 +263,10 @@ function buildMainDefinitionTemplate(
         titleMap.get("jitendex") ?? "",
         titleMap.get("jmdict") ?? "",
     ].filter(Boolean);
-    const templates = preferredTitles.map(
-        (title) => `{single-glossary-${toKebabCase(title)}}`,
+    const templates = preferredTitles.map((title) =>
+        buildSingleGlossaryMarker(title),
     );
     return templates.join("") || "{glossary-first}";
-}
-
-function normalizeDictionaryTitle(value: string): string {
-    const lowered = value.toLowerCase();
-    if (lowered.includes("jitendex")) {
-        return "jitendex";
-    }
-    if (lowered.includes("jmdict")) {
-        return "jmdict";
-    }
-    return lowered;
-}
-
-function toKebabCase(value: string): string {
-    return value
-        .replace(/[\s_\u3000]/g, "-")
-        .replace(/[^\p{L}\p{N}-]/gu, "")
-        .replace(/--+/g, "-")
-        .replace(/^-|-$/g, "")
-        .toLowerCase();
 }
 
 async function resolveRelatedWord(

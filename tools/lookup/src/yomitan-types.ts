@@ -64,6 +64,8 @@ export interface YomitanCoreLike {
         enabledDictionaryMap: Map<string, unknown>;
         dictionaries: { name: string; enabled: boolean }[];
         dictionaryInfo: DictionarySummary[];
+        resultOutputMode?: "split" | "group" | "merge";
+        dictionaryStylesMap?: Map<string, string>;
         cardFormat: {
             deck: string;
             model: string;

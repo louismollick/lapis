@@ -9,6 +9,7 @@
     "scripts": {
         "build": "tsc -p tsconfig.json",
         "check": "biome check . && tsc --noEmit",
+        "test": "npm run build && node --test dist/test/*.test.js",
         "fetch-dictionaries": "node dist/scripts/fetch-dictionaries.js"
     },
     "dependencies": {
