@@ -523,10 +523,10 @@ def ensure_node_ready(tool_root: Path, cli_path: Path, fetch_path: Path) -> None
 
     if not cli_path.exists():
         install_command = [npm, "ci"] if (tool_root / "package-lock.json").exists() else [npm, "install"]
-        run_command(install_command, tool_root)
-        run_command([npm, "run", "build"], tool_root)
+        run_command(install_command, tool_root, node_path=node, npm_path=npm)
+        run_command([npm, "run", "build"], tool_root, node_path=node, npm_path=npm)
     elif needs_tool_rebuild(tool_root, cli_path, fetch_path):
-        run_command([npm, "run", "build"], tool_root)
+        run_command([npm, "run", "build"], tool_root, node_path=node, npm_path=npm)
 
     cache_dir = tool_root.parent.parent / ".cache" / "yomitan-dicts"
     required_archives = {
@@ -537,8 +537,8 @@ def ensure_node_ready(tool_root: Path, cli_path: Path, fetch_path: Path) -> None
     }
     if not cache_dir.exists() or any(not (cache_dir / file_name).exists() for file_name in required_archives):
         if not fetch_path.exists():
-            run_command([npm, "run", "build"], tool_root)
-        run_command([node, str(fetch_path)], tool_root)
+            run_command([npm, "run", "build"], tool_root, node_path=node, npm_path=npm)
+        run_command([node, str(fetch_path)], tool_root, node_path=node, npm_path=npm)
 
 
 def needs_tool_rebuild(tool_root: Path, cli_path: Path, fetch_path: Path) -> bool:
@@ -568,12 +568,31 @@ def needs_tool_rebuild(tool_root: Path, cli_path: Path, fetch_path: Path) -> boo
     return False
 
 
-def run_command(command: Sequence[str], cwd: Path) -> None:
+def run_command(
+    command: Sequence[str],
+    cwd: Path,
+    *,
+    node_path: str | None = None,
+    npm_path: str | None = None,
+) -> None:
     env = os.environ.copy()
     env["npm_config_registry"] = "https://registry.npmjs.org/"
+    env["PATH"] = build_command_path(env.get("PATH", ""), node_path, npm_path)
     completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False, env=env)
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or f"Command failed: {' '.join(command)}")
+
+
+def build_command_path(existing_path: str, node_path: str | None, npm_path: str | None) -> str:
+    path_parts: list[str] = []
+    for executable_path in (node_path, npm_path):
+        if executable_path:
+            parent = str(Path(executable_path).resolve().parent)
+            if parent not in path_parts:
+                path_parts.append(parent)
+    if existing_path:
+        path_parts.append(existing_path)
+    return os.pathsep.join(path_parts)
 
 
 def resolve_executable(name: str) -> str | None:
