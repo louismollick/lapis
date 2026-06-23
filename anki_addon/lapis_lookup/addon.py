@@ -4,6 +4,8 @@ import glob
 import html
 import json
 import os
+import copy
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -16,7 +18,11 @@ from aqt.operations import QueryOp
 from aqt.qt import QAction, QMenu, qconnect
 from aqt.utils import showInfo, showWarning, tooltip
 
-from .generated_lookup_assets import BACK_TEMPLATE, STYLING_CSS
+from .generated_lookup_assets import (
+    LOOKUP_CSS_BLOCK,
+    LOOKUP_MARKUP_BLOCK,
+    LOOKUP_SCRIPT_BLOCK,
+)
 
 LOOKUP_FIELD_NAME = "KanjiLookupData"
 LOOKUP_TEMPLATE_MARKER = "lapis-lookup-v1"
@@ -177,6 +183,16 @@ def clone_lookup_model(col: Any, model: dict[str, Any]) -> dict[str, Any]:
 
 
 def refresh_lookup_model(col: Any, model: dict[str, Any]) -> None:
+    base_model = find_base_model_for_lookup(col, model)
+    if base_model:
+        refreshed = col.models.copy(base_model, add=False)
+        refreshed["id"] = model["id"]
+        refreshed["name"] = model["name"]
+        ensure_lookup_field(col, refreshed)
+        if apply_lookup_assets(refreshed):
+            col.models.update_dict(refreshed, skip_checks=True)
+        return
+
     ensure_lookup_field(col, model)
     if apply_lookup_assets(model):
         col.models.update_dict(model, skip_checks=True)
@@ -201,16 +217,78 @@ def ensure_lookup_field(col: Any, model: dict[str, Any]) -> None:
 def apply_lookup_assets(model: dict[str, Any]) -> bool:
     changed = False
 
-    if model.get("css") != STYLING_CSS:
-        model["css"] = STYLING_CSS
+    patched_css = patch_lookup_css(model.get("css", ""))
+    if patched_css != model.get("css"):
+        model["css"] = patched_css
         changed = True
 
     for template in model["tmpls"]:
-        if template.get("afmt") != BACK_TEMPLATE:
-            template["afmt"] = BACK_TEMPLATE
+        patched_afmt = patch_lookup_template(template.get("afmt", ""))
+        if patched_afmt != template.get("afmt"):
+            template["afmt"] = patched_afmt
             changed = True
 
     return changed
+
+
+def patch_lookup_css(css: str) -> str:
+    marker_start = "/* lapis-lookup-v1:start */"
+    marker_end = "/* lapis-lookup-v1:end */"
+    if marker_start in css and marker_end in css:
+        start = css.index(marker_start)
+        end = css.index(marker_end, start) + len(marker_end)
+        css = f"{css[:start].rstrip()}\n\n{css[end:].lstrip()}"
+
+    css = css.rstrip()
+    return f"{css}\n\n{LOOKUP_CSS_BLOCK}\n" if css else f"{LOOKUP_CSS_BLOCK}\n"
+
+
+def patch_lookup_template(afmt: str) -> str:
+    markup_start = "<!-- lapis-lookup-v1:markup:start -->"
+    markup_end = "<!-- lapis-lookup-v1:markup:end -->"
+
+    if markup_start in afmt and markup_end in afmt:
+        start = afmt.index(markup_start)
+        end = afmt.index(markup_end, start) + len(markup_end)
+        afmt = f"{afmt[:start].rstrip()}\n\n{afmt[end:].lstrip()}"
+
+    afmt = re.sub(
+        r'\s*<script>\s*\(\(\) => \{\s*if \(window\.__lapisLookupInitialized\) return;.*?</script>\s*$',
+        "",
+        afmt,
+        count=1,
+        flags=re.S,
+    ).rstrip()
+
+    image_modal_marker = "<!------- Image modal --------->"
+    if image_modal_marker in afmt:
+        afmt = afmt.replace(
+            image_modal_marker,
+            f"{LOOKUP_MARKUP_BLOCK}\n\n    {image_modal_marker}",
+            1,
+        )
+    else:
+        afmt = f"{afmt}\n\n{LOOKUP_MARKUP_BLOCK}"
+
+    return f"{afmt.rstrip()}\n\n{LOOKUP_SCRIPT_BLOCK}\n"
+
+
+def find_base_model_for_lookup(col: Any, model: dict[str, Any]) -> dict[str, Any] | None:
+    model_name = model.get("name", "")
+    match = re.fullmatch(r"(.+)\+Lookup(?: \d+)?", model_name)
+    if not match:
+        return None
+
+    base_name = match.group(1)
+    existing_models = col.models.all_names_and_ids()
+    base_model_id = next(
+        (item.id for item in existing_models if item.name == base_name),
+        None,
+    )
+    if base_model_id is None:
+        return None
+
+    return copy.deepcopy(col.models.get(base_model_id))
 
 
 def run_lookup_cli(config: dict[str, Any], note_ids: Sequence[int], col: Any) -> dict[str, Any]:
