@@ -157,7 +157,22 @@ def apply_backfill_results(col: Any, results: dict[str, Any]) -> BackfillSummary
 
         if not note_has_field(note, LOOKUP_FIELD_NAME) or "payload" not in item:
             skipped += 1
-            warnings.append(f"Skipped note {note_id}: lookup payload unavailable after setup.")
+            model = note.note_type()
+            field_names = [field["name"] for field in model["flds"]]
+            warnings.append(
+                "\n".join(
+                    [
+                        f"Skipped note {note_id}: lookup payload unavailable after setup.",
+                        f"mode={mode}",
+                        f"status={status}",
+                        f"model={model.get('name', '<unknown>')}",
+                        f"hasLookupField={note_has_field(note, LOOKUP_FIELD_NAME)}",
+                        f"hasPayload={'payload' in item}",
+                        f"resultKeys={sorted(item.keys())}",
+                        f"fields={field_names}",
+                    ]
+                )
+            )
             continue
 
         serialized_payload = json.dumps(item["payload"], ensure_ascii=False, separators=(",", ":"))
