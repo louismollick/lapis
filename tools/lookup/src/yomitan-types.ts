@@ -64,7 +64,6 @@ export interface YomitanCoreLike {
         enabledDictionaryMap: Map<string, unknown>;
         dictionaries: { name: string; enabled: boolean }[];
         dictionaryInfo: DictionarySummary[];
-        additionalTemplates?: string;
         cardFormat: {
             deck: string;
             model: string;
