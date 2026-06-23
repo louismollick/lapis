@@ -43,11 +43,40 @@ export type FindTermsResult = {
     originalTextLength: number;
 };
 
+export type BuildAnkiNoteResult =
+    | {
+          status: "ok";
+          fields: Record<string, string>;
+          errors: string[];
+      }
+    | {
+          status: "no-entry";
+          errors: string[];
+      };
+
 export interface YomitanCoreLike {
     initialize(): Promise<void>;
     dispose(): Promise<void>;
     importDictionary(archive: ArrayBuffer): Promise<unknown>;
     getDictionaryInfo(): Promise<DictionarySummary[]>;
+    buildAnkiNoteFromTerm(input: {
+        term: string;
+        enabledDictionaryMap: Map<string, unknown>;
+        dictionaries: { name: string; enabled: boolean }[];
+        dictionaryInfo: DictionarySummary[];
+        cardFormat: {
+            deck: string;
+            model: string;
+            fields: Record<string, { value: string }>;
+        };
+        context: {
+            url: string;
+            query: string;
+            fullQuery: string;
+            documentTitle: string;
+        };
+        options?: Record<string, unknown>;
+    }): Promise<BuildAnkiNoteResult>;
     findTerms(
         text: string,
         config: {

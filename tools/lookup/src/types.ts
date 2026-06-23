@@ -1,5 +1,8 @@
+export type LookupCliInputMode = "lookupOnly" | "convertLegacy";
+
 export type LookupCliInputItem = {
     noteId: number;
+    mode: LookupCliInputMode;
     expression: string;
 };
 
@@ -35,7 +38,11 @@ export type LookupCardPayload = {
 
 export type LookupCliResultItem = {
     noteId: number;
-    payload: LookupCardPayload;
+    mode: LookupCliInputMode;
+    status: "ok" | "skipped";
+    expression: string;
+    payload?: LookupCardPayload;
+    generatedFields?: Record<string, string>;
     warnings: string[];
 };
 

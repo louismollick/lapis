@@ -19,27 +19,37 @@ from aqt.qt import QAction, QMenu, qconnect
 from aqt.utils import showInfo, showWarning, tooltip
 
 from .generated_lookup_assets import (
+    BACK_TEMPLATE,
+    FRONT_TEMPLATE,
+    LAPIS_FIELDS,
+    STYLING_CSS,
     LOOKUP_CSS_BLOCK,
     LOOKUP_MARKUP_BLOCK,
     LOOKUP_SCRIPT_BLOCK,
 )
+from .note_type_helpers import (
+    CANONICAL_LAPIS_MODEL_NAME,
+    LEGACY_CONVERT_MODE,
+    LOOKUP_TEMPLATE_MARKER,
+    LOOKUP_FIELD_NAME,
+    LOOKUP_ONLY_MODE,
+    build_legacy_field_map,
+    build_legacy_template_map,
+    build_lookup_field_map,
+    build_lookup_template_map,
+    extract_sort_field_expression,
+    is_lapis_model,
+    is_lookup_enabled_model,
+    partition_note_ids,
+)
 
-LOOKUP_FIELD_NAME = "KanjiLookupData"
-LOOKUP_TEMPLATE_MARKER = "lapis-lookup-v1"
 ADDON_NAME = __name__.split(".")[0]
-CORE_LAPIS_FIELDS = {
-    "Expression",
-    "ExpressionFurigana",
-    "MainDefinition",
-    "Glossary",
-    "Sentence",
-    "FreqSort",
-}
 
 
 @dataclass
 class BackfillSummary:
     processed: int
+    converted: int
     skipped: int
     warnings: list[str]
 
@@ -70,23 +80,7 @@ def setup_and_backfill_selected_notes(browser: Browser) -> None:
         showWarning("Select at least one note in Browse first.", parent=browser)
         return
 
-    try:
-        model = mw.col.models.get(mw.col.models.get_single_notetype_of_notes(note_ids))
-    except Exception as error:
-        showWarning(str(error), parent=browser)
-        return
-
-    if not is_lapis_model(model):
-        showWarning("This command currently supports Lapis-family note types only.", parent=browser)
-        return
-
     config = load_config()
-
-    try:
-        ensure_lookup_model_for_notes(mw.col, note_ids)
-    except Exception as error:
-        showWarning(str(error), parent=browser)
-        return
 
     QueryOp(
         parent=browser,
@@ -124,36 +118,63 @@ def diagnose_selected_notes(browser: Browser) -> None:
 
 
 def run_setup_and_backfill(col: Any, note_ids: Sequence[int], config: dict[str, Any]) -> BackfillSummary:
-    model_id = col.models.get_single_notetype_of_notes(note_ids)
-    model = col.models.get(model_id)
-    if not is_lapis_model(model):
-        raise ValueError("Selected notes are not on a supported Lapis-family note type.")
-
     results = run_lookup_cli(config, note_ids, col)
     warnings: list[str] = []
     processed = 0
+    converted = 0
     skipped = 0
+    canonical_model = None
 
     for item in results.get("results", []):
         note_id = item["noteId"]
-        note = col.get_note(note_id)
-        if LOOKUP_FIELD_NAME not in note:
+        mode = item.get("mode", LOOKUP_ONLY_MODE)
+        status = item.get("status", "ok")
+        warnings.extend(item.get("warnings", []))
+
+        if status != "ok":
             skipped += 1
-            warnings.append(f"Skipped note {note_id}: {LOOKUP_FIELD_NAME} missing after conversion.")
+            continue
+
+        note = col.get_note(note_id)
+        if mode == LEGACY_CONVERT_MODE:
+            if canonical_model is None:
+                canonical_model = ensure_canonical_lookup_model(col)
+            convert_legacy_notes_to_model(
+                col,
+                [note_id],
+                note.note_type(),
+                canonical_model,
+            )
+            note = col.get_note(note_id)
+            write_generated_fields(note, item.get("generatedFields", {}))
+            converted += 1
+        elif LOOKUP_FIELD_NAME not in note:
+            ensure_lookup_model_for_notes(col, [note_id])
+            note = col.get_note(note_id)
+
+        if LOOKUP_FIELD_NAME not in note or "payload" not in item:
+            skipped += 1
+            warnings.append(f"Skipped note {note_id}: lookup payload unavailable after setup.")
             continue
 
         serialized_payload = json.dumps(item["payload"], ensure_ascii=False, separators=(",", ":"))
         note[LOOKUP_FIELD_NAME] = html.escape(serialized_payload, quote=False)
         col.update_note(note, skip_undo_entry=True)
         processed += 1
-        warnings.extend(item.get("warnings", []))
 
-    return BackfillSummary(processed=processed, skipped=skipped, warnings=warnings)
+    return BackfillSummary(
+        processed=processed,
+        converted=converted,
+        skipped=skipped,
+        warnings=warnings,
+    )
 
 
 def on_backfill_success(browser: Browser, summary: BackfillSummary) -> None:
     browser.search()
     message = f"Processed {summary.processed} note(s)"
+    if summary.converted:
+        message += f", converted {summary.converted}"
     if summary.skipped:
         message += f", skipped {summary.skipped}"
     tooltip(message, parent=browser)
@@ -163,14 +184,15 @@ def on_backfill_success(browser: Browser, summary: BackfillSummary) -> None:
 
 
 def ensure_lookup_model_for_notes(col: Any, note_ids: Sequence[int]) -> None:
-    model_id = col.models.get_single_notetype_of_notes(note_ids)
-    model = col.models.get(model_id)
-    if is_lookup_enabled_model(model):
-        refresh_lookup_model(col, model)
-        return
-
-    target_model = clone_lookup_model(col, model)
-    convert_notes_to_model(col, note_ids, model, target_model)
+    for model_id, model_note_ids in partition_note_ids(col, note_ids).items():
+        model = col.models.get(model_id)
+        if not is_lapis_model(model):
+            continue
+        if is_lookup_enabled_model(model):
+            refresh_lookup_model(col, model)
+            continue
+        target_model = clone_lookup_model(col, model)
+        convert_notes_to_model(col, model_note_ids, model, target_model)
 
 
 def clone_lookup_model(col: Any, model: dict[str, Any]) -> dict[str, Any]:
@@ -194,14 +216,20 @@ def refresh_lookup_model(col: Any, model: dict[str, Any]) -> None:
         return
 
     ensure_lookup_field(col, model)
+    ensure_front_template(model)
     if apply_lookup_assets(model):
         col.models.update_dict(model, skip_checks=True)
 
 
 def convert_notes_to_model(col: Any, note_ids: Sequence[int], old_model: dict[str, Any], new_model: dict[str, Any]) -> None:
-    field_map = {index: index for index in range(len(old_model["flds"]))}
-    field_map[len(new_model["flds"]) - 1] = None
-    template_map = {index: index for index in range(len(old_model["tmpls"]))}
+    field_map = build_lookup_field_map(old_model, new_model)
+    template_map = build_lookup_template_map(old_model, new_model)
+    col.models.change(old_model, list(note_ids), new_model, field_map, template_map)
+
+
+def convert_legacy_notes_to_model(col: Any, note_ids: Sequence[int], old_model: dict[str, Any], new_model: dict[str, Any]) -> None:
+    field_map = build_legacy_field_map(old_model, new_model)
+    template_map = build_legacy_template_map(old_model)
     col.models.change(old_model, list(note_ids), new_model, field_map, template_map)
 
 
@@ -229,7 +257,6 @@ def apply_lookup_assets(model: dict[str, Any]) -> bool:
             changed = True
 
     return changed
-
 
 def patch_lookup_css(css: str) -> str:
     marker_start = "/* lapis-lookup-v1:start */"
@@ -291,6 +318,112 @@ def find_base_model_for_lookup(col: Any, model: dict[str, Any]) -> dict[str, Any
     return copy.deepcopy(col.models.get(base_model_id))
 
 
+def ensure_canonical_lookup_model(col: Any) -> dict[str, Any]:
+    model = get_model_by_name(col, CANONICAL_LAPIS_MODEL_NAME)
+    if model is None:
+        model = create_canonical_lookup_model(col)
+    else:
+        if sync_canonical_lookup_model(col, model):
+            col.models.update_dict(model, skip_checks=True)
+    return model
+
+
+def create_canonical_lookup_model(col: Any) -> dict[str, Any]:
+    model = col.models.new(CANONICAL_LAPIS_MODEL_NAME)
+    model["flds"] = []
+    model["tmpls"] = []
+    for field_spec in LAPIS_FIELDS:
+        field = col.models.new_field(field_spec["name"])
+        if "font" in field_spec:
+            field["font"] = field_spec["font"]
+        if "size" in field_spec:
+            field["size"] = field_spec["size"]
+        col.models.add_field(model, field)
+    template = col.models.new_template("Mining")
+    template["qfmt"] = FRONT_TEMPLATE
+    template["afmt"] = BACK_TEMPLATE
+    col.models.add_template(model, template)
+    model["css"] = STYLING_CSS
+    model["sortf"] = next(
+        index for index, field in enumerate(model["flds"]) if field["name"] == "Expression"
+    )
+    col.models.add(model)
+    return model
+
+
+def sync_canonical_lookup_model(col: Any, model: dict[str, Any]) -> bool:
+    changed = False
+    expected_names = [field["name"] for field in LAPIS_FIELDS]
+    existing_names = [field["name"] for field in model["flds"]]
+
+    for field_spec in LAPIS_FIELDS:
+        if field_spec["name"] in existing_names:
+            continue
+        field = col.models.new_field(field_spec["name"])
+        if "font" in field_spec:
+            field["font"] = field_spec["font"]
+        if "size" in field_spec:
+            field["size"] = field_spec["size"]
+        col.models.add_field(model, field)
+        changed = True
+
+    field_lookup = {field["name"]: field for field in model["flds"]}
+    reordered_fields = [field_lookup[name] for name in expected_names if name in field_lookup]
+    if [field["name"] for field in reordered_fields] != existing_names:
+        model["flds"] = reordered_fields
+        changed = True
+
+    if not model["tmpls"]:
+        template = col.models.new_template("Mining")
+        model["tmpls"] = [template]
+        changed = True
+
+    if len(model["tmpls"]) > 1:
+        model["tmpls"] = [model["tmpls"][0]]
+        changed = True
+
+    template = model["tmpls"][0]
+    if template.get("name") != "Mining":
+        template["name"] = "Mining"
+        changed = True
+
+    if template.get("qfmt") != FRONT_TEMPLATE:
+        template["qfmt"] = FRONT_TEMPLATE
+        changed = True
+    if template.get("afmt") != BACK_TEMPLATE:
+        template["afmt"] = BACK_TEMPLATE
+        changed = True
+    if model.get("css") != STYLING_CSS:
+        model["css"] = STYLING_CSS
+        changed = True
+
+    expression_index = next(
+        index for index, field in enumerate(model["flds"]) if field["name"] == "Expression"
+    )
+    if int(model.get("sortf", -1)) != expression_index:
+        model["sortf"] = expression_index
+        changed = True
+
+    return changed
+
+
+def get_model_by_name(col: Any, name: str) -> dict[str, Any] | None:
+    by_name = getattr(col.models, "by_name", None)
+    if callable(by_name):
+        return by_name(name)
+
+    for item in col.models.all_names_and_ids():
+        if item.name == name:
+            return col.models.get(item.id)
+    return None
+
+
+def write_generated_fields(note: Any, generated_fields: dict[str, str]) -> None:
+    for field_name, value in generated_fields.items():
+        if field_name in note:
+            note[field_name] = value
+
+
 def run_lookup_cli(config: dict[str, Any], note_ids: Sequence[int], col: Any) -> dict[str, Any]:
     repo_root = Path(config["lookup_repo_root"]).expanduser()
     tool_root = repo_root / "tools" / "lookup"
@@ -300,7 +433,7 @@ def run_lookup_cli(config: dict[str, Any], note_ids: Sequence[int], col: Any) ->
     ensure_node_ready(tool_root, cli_path, fetch_path)
 
     payload = {
-        "items": [{"noteId": note_id, "expression": col.get_note(note_id)["Expression"]} for note_id in note_ids],
+        "items": build_lookup_items(note_ids, col),
         "maxWordsPerKanji": int(config.get("max_words_per_kanji", 12)),
         "definitionDictionaryNames": config.get("definition_dictionary_names", ["Jitendex"]),
         "frequencyDictionaryNames": config.get("frequency_dictionary_names", ["JPDB"]),
@@ -322,6 +455,32 @@ def run_lookup_cli(config: dict[str, Any], note_ids: Sequence[int], col: Any) ->
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "Lookup CLI failed.")
 
     return json.loads(completed.stdout)
+
+
+def build_lookup_items(note_ids: Sequence[int], col: Any) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for note_id in note_ids:
+        note = col.get_note(note_id)
+        model = note.note_type()
+        if is_lapis_model(model):
+            items.append(
+                {
+                    "noteId": note_id,
+                    "mode": LOOKUP_ONLY_MODE,
+                    "expression": note["Expression"],
+                }
+            )
+            continue
+
+        expression = extract_sort_field_expression(note)
+        items.append(
+            {
+                "noteId": note_id,
+                "mode": LEGACY_CONVERT_MODE,
+                "expression": expression,
+            }
+        )
+    return items
 
 
 def ensure_node_ready(tool_root: Path, cli_path: Path, fetch_path: Path) -> None:
@@ -388,18 +547,6 @@ def resolve_executable(name: str) -> str | None:
             return matches[0]
 
     return None
-
-
-def is_lapis_model(model: dict[str, Any]) -> bool:
-    field_names = {field["name"] for field in model["flds"]}
-    return CORE_LAPIS_FIELDS.issubset(field_names)
-
-
-def is_lookup_enabled_model(model: dict[str, Any]) -> bool:
-    field_names = {field["name"] for field in model["flds"]}
-    if LOOKUP_FIELD_NAME not in field_names:
-        return False
-    return any(LOOKUP_TEMPLATE_MARKER in template["afmt"] for template in model["tmpls"])
 
 
 def unique_lookup_model_name(col: Any, base_name: str) -> str:

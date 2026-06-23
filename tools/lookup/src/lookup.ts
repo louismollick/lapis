@@ -18,11 +18,13 @@ import { renderFallbackKanjiHtml, renderSelectedEntryHtml } from "./render.js";
 import type {
     LookupCardPayload,
     LookupCliInput,
+    LookupCliInputItem,
     LookupCliOutput,
     LookupCliResultItem,
     LookupRelatedWordPayload,
 } from "./types.js";
 import type {
+    BuildAnkiNoteResult,
     DictionarySummary,
     KanjiDictionaryEntry,
     TermDictionaryEntry,
@@ -48,7 +50,7 @@ export async function runLookup(
         const results: LookupCliResultItem[] = [];
         for (const item of input.items) {
             results.push(
-                await buildLookupResult(item.noteId, item.expression, runtime, {
+                await buildLookupResult(item, runtime, {
                     maxWordsPerKanji:
                         input.maxWordsPerKanji ?? DEFAULT_MAX_WORDS_PER_KANJI,
                     definitionDictionaryNames:
@@ -84,8 +86,7 @@ async function createRuntime(): Promise<LookupRuntime> {
 }
 
 async function buildLookupResult(
-    noteId: number,
-    expression: string,
+    item: LookupCliInputItem,
     runtime: LookupRuntime,
     options: {
         maxWordsPerKanji: number;
@@ -93,7 +94,56 @@ async function buildLookupResult(
         frequencyDictionaryNames: string[];
     },
 ): Promise<LookupCliResultItem> {
+    const { noteId, expression, mode } = item;
     const warnings: string[] = [];
+    let generatedFields: Record<string, string> | undefined;
+
+    if (mode === "convertLegacy") {
+        const generatedNote = await generateLapisFields(expression, runtime);
+        if (generatedNote.status === "no-entry") {
+            return {
+                noteId,
+                mode,
+                status: "skipped",
+                expression,
+                warnings: [
+                    `Skipped note ${noteId}: no Yomitan entry for "${expression}".`,
+                    ...generatedNote.errors,
+                ],
+            };
+        }
+        warnings.push(...generatedNote.errors);
+        generatedFields = generatedNote.fields;
+    }
+
+    const payload = await buildLookupPayload(
+        expression,
+        runtime,
+        options,
+        warnings,
+    );
+
+    return {
+        noteId,
+        mode,
+        status: "ok",
+        expression,
+        generatedFields,
+        payload,
+        warnings,
+    };
+}
+
+async function buildLookupPayload(
+    expression: string,
+    runtime: LookupRuntime,
+    options: {
+        maxWordsPerKanji: number;
+        definitionDictionaryNames: string[];
+        frequencyDictionaryNames: string[];
+    },
+    warnings: string[],
+): Promise<LookupCardPayload> {
     const kanjiCharacters = extractUniqueKanji(expression);
     const payload: LookupCardPayload = {
         version: 1,
@@ -122,11 +172,103 @@ async function buildLookupResult(
         });
     }
 
+    return payload;
+}
+
+async function generateLapisFields(
+    expression: string,
+    runtime: LookupRuntime,
+): Promise<BuildAnkiNoteResult> {
+    const dictionaries = runtime.dictionaryInfo.map((dictionary) => ({
+        name: dictionary.title,
+        enabled: true,
+    }));
+
+    return runtime.core.buildAnkiNoteFromTerm({
+        term: expression,
+        enabledDictionaryMap: runtime.termDictionaryMap,
+        dictionaries,
+        dictionaryInfo: runtime.dictionaryInfo,
+        cardFormat: {
+            deck: "Lapis",
+            model: "Lapis+Lookup",
+            fields: Object.fromEntries(
+                Object.entries(
+                    buildLapisFieldTemplates(runtime.dictionaryInfo),
+                ).map(([fieldName, value]) => [fieldName, { value }]),
+            ),
+        },
+        context: {
+            url: "",
+            query: expression,
+            fullQuery: expression,
+            documentTitle: "",
+        },
+        options: {
+            matchType: "exact",
+            deinflect: true,
+            removeNonJapaneseCharacters: false,
+        },
+    });
+}
+
+function buildLapisFieldTemplates(
+    dictionaryInfo: DictionarySummary[],
+): Record<string, string> {
     return {
-        noteId,
-        payload,
-        warnings,
+        Expression: "{expression}",
+        ExpressionFurigana: "{furigana-plain}",
+        ExpressionReading: "{reading}",
+        ExpressionAudio: "{audio}",
+        SelectionText: "{popup-selection-text}",
+        MainDefinition: buildMainDefinitionTemplate(dictionaryInfo),
+        Sentence: "{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}",
+        Glossary: "{glossary}",
+        PitchPosition: "{pitch-accent-positions}",
+        PitchCategories: "{pitch-accent-categories}",
+        Frequency: "{frequencies}",
+        FreqSort: "{frequency-harmonic-rank}",
+        MiscInfo: "{document-title}",
     };
+}
+
+function buildMainDefinitionTemplate(
+    dictionaryInfo: DictionarySummary[],
+): string {
+    const titleMap = new Map(
+        dictionaryInfo.map((dictionary) => [
+            normalizeDictionaryTitle(dictionary.title),
+            dictionary.title,
+        ]),
+    );
+    const preferredTitles = [
+        titleMap.get("jitendex") ?? "",
+        titleMap.get("jmdict") ?? "",
+    ].filter(Boolean);
+    const templates = preferredTitles.map(
+        (title) => `{single-glossary-${toKebabCase(title)}-brief}`,
+    );
+    return templates.join("") || "{glossary-first-brief}";
+}
+
+function normalizeDictionaryTitle(value: string): string {
+    const lowered = value.toLowerCase();
+    if (lowered.includes("jitendex")) {
+        return "jitendex";
+    }
+    if (lowered.includes("jmdict")) {
+        return "jmdict";
+    }
+    return lowered;
+}
+
+function toKebabCase(value: string): string {
+    return value
+        .replace(/[\s_\u3000]/g, "-")
+        .replace(/[^\p{L}\p{N}-]/gu, "")
+        .replace(/--+/g, "-")
+        .replace(/^-|-$/g, "")
+        .toLowerCase();
 }
 
 async function resolveRelatedWord(
