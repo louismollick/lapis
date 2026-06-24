@@ -709,6 +709,46 @@
         showLookupSheet(null);
     }
 
+    function buildKanjiSubtitle(kanjiItem) {
+        const parts = [];
+        const relatedWordCount = (kanjiItem.relatedWords || []).length;
+        const componentCount = (kanjiItem.components || []).length;
+        if (relatedWordCount > 0) {
+            parts.push(`${relatedWordCount} related words`);
+        }
+        if (componentCount > 0) {
+            parts.push(`${componentCount} components`);
+        }
+        return parts.join(" | ") || "No related data";
+    }
+
+    function createKanjiComponentSection(kanjiItem) {
+        if (!Array.isArray(kanjiItem.components) || kanjiItem.components.length === 0) {
+            return null;
+        }
+
+        const section = document.createElement("section");
+        section.className = "lapis-lookup-components";
+
+        const heading = document.createElement("div");
+        heading.className = "lapis-lookup-components-title";
+        heading.textContent = "Components";
+        section.appendChild(heading);
+
+        const list = document.createElement("div");
+        list.className = "lapis-lookup-component-list";
+
+        for (const component of kanjiItem.components) {
+            const item = document.createElement("div");
+            item.className = "lapis-lookup-component-chip";
+            item.textContent = component;
+            list.appendChild(item);
+        }
+
+        section.appendChild(list);
+        return section;
+    }
+
     function renderKanjiPopover(store, kanjiItem) {
         const title = document.getElementById("lapis-lookup-kanji-char");
         const subtitle = document.getElementById("lapis-lookup-kanji-subtitle");
@@ -716,7 +756,7 @@
         if (!title || !subtitle || !body) return;
 
         title.textContent = kanjiItem.char;
-        subtitle.textContent = `${(kanjiItem.relatedWords || []).length} related words`;
+        subtitle.textContent = buildKanjiSubtitle(kanjiItem);
         body.innerHTML = "";
 
         const list = document.createElement("div");
@@ -749,12 +789,17 @@
             list.appendChild(button);
         }
 
-        if (!list.children.length) {
-            body.innerHTML = `<div class="lapis-lookup-empty">No related words available.</div>`;
-            return;
-        }
+        const componentSection = createKanjiComponentSection(kanjiItem);
 
-        body.appendChild(list);
+        if (list.children.length) {
+            body.appendChild(list);
+        }
+        if (componentSection) {
+            body.appendChild(componentSection);
+        }
+        if (!list.children.length && !componentSection) {
+            body.innerHTML = `<div class="lapis-lookup-empty">No related data available.</div>`;
+        }
     }
 
     function renderWordPopover(store, kanjiItem, relatedWord) {
@@ -773,7 +818,7 @@
 
         body.innerHTML = "";
         const detail = document.createElement("div");
-        detail.className = "lapis-lookup-word-detail";
+        detail.className = "lapis-lookup-word-detail definition";
         detail.innerHTML = relatedWord.entryHtml || `<div class="lapis-lookup-empty">No dictionary entry available for ${relatedWord.term}.</div>`;
         body.appendChild(detail);
     }

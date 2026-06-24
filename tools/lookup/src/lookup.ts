@@ -15,17 +15,21 @@ import {
     selectPreferredDictionaryTitle,
     selectPreferredFrequency,
 } from "./dictionaries.js";
-import { getRelatedWordsForKanji } from "./kanji-provider.js";
-import { renderFallbackKanjiHtml, renderSelectedEntryHtml } from "./render.js";
+import { getRelatedDataForKanji } from "./kanji-provider.js";
+import { renderFallbackKanjiHtml } from "./render.js";
 import type {
     LookupCardPayload,
     LookupCliInput,
     LookupCliInputItem,
     LookupCliOutput,
+    LookupCliProgressItem,
     LookupCliResultItem,
+    LookupCliStreamItem,
+    LookupKanjiPayload,
     LookupRelatedWordPayload,
 } from "./types.js";
 import type {
+    AnkiFieldRenderInput,
     BuildAnkiNoteResult,
     DictionarySummary,
     KanjiDictionaryEntry,
@@ -40,7 +44,38 @@ type LookupRuntime = {
     dictionaryStylesMap: Map<string, string>;
     termDictionaryMap: ReturnType<typeof buildTermDictionaryMap>;
     kanjiDictionaryMap: ReturnType<typeof buildKanjiDictionaryMap>;
+    cache: LookupCache;
 };
+
+type LookupOptions = {
+    maxWordsPerKanji: number;
+    definitionDictionaryNames: string[];
+    frequencyDictionaryNames: string[];
+};
+
+type CachedValue<T> = {
+    value: T;
+    warnings: string[];
+};
+
+type LookupCache = {
+    generatedFieldsByExpression: Map<string, Promise<BuildAnkiNoteResult>>;
+    payloadByExpression: Map<string, Promise<CachedValue<LookupCardPayload>>>;
+    kanjiByCharacter: Map<string, Promise<CachedValue<LookupKanjiPayload>>>;
+    relatedWordByTerm: Map<
+        string,
+        Promise<CachedValue<LookupRelatedWordPayload>>
+    >;
+};
+
+export function createLookupCache(): LookupCache {
+    return {
+        generatedFieldsByExpression: new Map(),
+        payloadByExpression: new Map(),
+        kanjiByCharacter: new Map(),
+        relatedWordByTerm: new Map(),
+    };
+}
 
 export async function runLookup(
     input: LookupCliInput,
@@ -50,25 +85,58 @@ export async function runLookup(
 
     try {
         const results: LookupCliResultItem[] = [];
+        const options = buildLookupOptions(input);
         for (const item of input.items) {
-            results.push(
-                await buildLookupResult(item, runtime, {
-                    maxWordsPerKanji:
-                        input.maxWordsPerKanji ?? DEFAULT_MAX_WORDS_PER_KANJI,
-                    definitionDictionaryNames:
-                        input.definitionDictionaryNames ??
-                        DEFAULT_DEFINITION_DICTIONARY_NAMES,
-                    frequencyDictionaryNames:
-                        input.frequencyDictionaryNames ??
-                        DEFAULT_FREQUENCY_DICTIONARY_NAMES,
-                }),
-            );
+            results.push(await buildLookupResult(item, runtime, options));
         }
 
         return { results };
     } finally {
         await runtime.core.dispose();
     }
+}
+
+export async function* streamLookupResults(
+    input: LookupCliInput,
+): AsyncGenerator<LookupCliStreamItem> {
+    await ensureDictionaryArchivesPresent();
+    const runtime = await createRuntime();
+
+    try {
+        const options = buildLookupOptions(input);
+        for (const [index, item] of input.items.entries()) {
+            yield buildProgressItem(item, index, input.items.length);
+            yield await buildLookupResult(item, runtime, options);
+        }
+    } finally {
+        await runtime.core.dispose();
+    }
+}
+
+export function buildProgressItem(
+    item: LookupCliInputItem,
+    index: number,
+    total: number,
+): LookupCliProgressItem {
+    return {
+        type: "progress",
+        completed: index,
+        total,
+        noteId: item.noteId,
+        expression: item.expression,
+    };
+}
+
+function buildLookupOptions(input: LookupCliInput): LookupOptions {
+    return {
+        maxWordsPerKanji: input.maxWordsPerKanji ?? DEFAULT_MAX_WORDS_PER_KANJI,
+        definitionDictionaryNames:
+            input.definitionDictionaryNames ??
+            DEFAULT_DEFINITION_DICTIONARY_NAMES,
+        frequencyDictionaryNames:
+            input.frequencyDictionaryNames ??
+            DEFAULT_FREQUENCY_DICTIONARY_NAMES,
+    };
 }
 
 async function createRuntime(): Promise<LookupRuntime> {
@@ -84,24 +152,24 @@ async function createRuntime(): Promise<LookupRuntime> {
         dictionaryStylesMap: buildDictionaryStylesMap(dictionaryInfo),
         termDictionaryMap: buildTermDictionaryMap(dictionaryInfo),
         kanjiDictionaryMap: buildKanjiDictionaryMap(dictionaryInfo),
+        cache: createLookupCache(),
     };
 }
 
-async function buildLookupResult(
+export async function buildLookupResult(
     item: LookupCliInputItem,
     runtime: LookupRuntime,
-    options: {
-        maxWordsPerKanji: number;
-        definitionDictionaryNames: string[];
-        frequencyDictionaryNames: string[];
-    },
+    options: LookupOptions,
 ): Promise<LookupCliResultItem> {
     const { noteId, expression, mode } = item;
     const warnings: string[] = [];
     let generatedFields: Record<string, string> | undefined;
 
     if (mode === "convertLegacy") {
-        const generatedNote = await generateLapisFields(expression, runtime);
+        const generatedNote = await generateLapisFieldsCached(
+            expression,
+            runtime,
+        );
         if (generatedNote.status === "no-entry") {
             return {
                 noteId,
@@ -118,12 +186,12 @@ async function buildLookupResult(
         generatedFields = generatedNote.fields;
     }
 
-    const payload = await buildLookupPayload(
+    const cachedPayload = await buildLookupPayloadCached(
         expression,
         runtime,
         options,
-        warnings,
     );
+    warnings.push(...cachedPayload.warnings);
 
     return {
         noteId,
@@ -131,21 +199,31 @@ async function buildLookupResult(
         status: "ok",
         expression,
         generatedFields,
-        payload,
+        payload: cachedPayload.value,
         warnings,
     };
+}
+
+function buildLookupPayloadCached(
+    expression: string,
+    runtime: LookupRuntime,
+    options: LookupOptions,
+): Promise<CachedValue<LookupCardPayload>> {
+    const cacheKey = `${expression}\0${options.maxWordsPerKanji}\0${options.definitionDictionaryNames.join("\0")}\0${options.frequencyDictionaryNames.join("\0")}`;
+    let cached = runtime.cache.payloadByExpression.get(cacheKey);
+    if (!cached) {
+        cached = buildLookupPayload(expression, runtime, options);
+        runtime.cache.payloadByExpression.set(cacheKey, cached);
+    }
+    return cached;
 }
 
 async function buildLookupPayload(
     expression: string,
     runtime: LookupRuntime,
-    options: {
-        maxWordsPerKanji: number;
-        definitionDictionaryNames: string[];
-        frequencyDictionaryNames: string[];
-    },
-    warnings: string[],
-): Promise<LookupCardPayload> {
+    options: LookupOptions,
+): Promise<CachedValue<LookupCardPayload>> {
+    const warnings: string[] = [];
     const kanjiCharacters = extractUniqueKanji(expression);
     const payload: LookupCardPayload = {
         version: 1,
@@ -154,27 +232,66 @@ async function buildLookupPayload(
     };
 
     for (const character of kanjiCharacters) {
-        const relatedWords = await getRelatedWordsForKanji(character);
-        const limitedWords = relatedWords.slice(0, options.maxWordsPerKanji);
-        const wordPayloads: LookupRelatedWordPayload[] = [];
-
-        for (const word of limitedWords) {
-            const relatedWordPayload = await resolveRelatedWord(
-                word,
-                runtime,
-                options,
-                warnings,
-            );
-            wordPayloads.push(relatedWordPayload);
-        }
+        const cachedKanji = await buildKanjiRelatedWordsCached(
+            character,
+            runtime,
+            options,
+        );
+        warnings.push(...cachedKanji.warnings);
 
         payload.kanji.push({
-            char: character,
-            relatedWords: wordPayloads,
+            ...cachedKanji.value,
         });
     }
 
-    return payload;
+    return { value: payload, warnings };
+}
+
+function buildKanjiRelatedWordsCached(
+    character: string,
+    runtime: LookupRuntime,
+    options: LookupOptions,
+): Promise<CachedValue<LookupKanjiPayload>> {
+    const cacheKey = `${character}\0${options.maxWordsPerKanji}\0${options.definitionDictionaryNames.join("\0")}\0${options.frequencyDictionaryNames.join("\0")}`;
+    let cached = runtime.cache.kanjiByCharacter.get(cacheKey);
+    if (!cached) {
+        cached = buildKanjiRelatedWords(character, runtime, options);
+        runtime.cache.kanjiByCharacter.set(cacheKey, cached);
+    }
+    return cached;
+}
+
+async function buildKanjiRelatedWords(
+    character: string,
+    runtime: LookupRuntime,
+    options: LookupOptions,
+): Promise<CachedValue<LookupKanjiPayload>> {
+    const warnings: string[] = [];
+    const relatedData = await getRelatedDataForKanji(character);
+    const limitedWords = relatedData.relatedWords.slice(
+        0,
+        options.maxWordsPerKanji,
+    );
+    const wordPayloads: LookupRelatedWordPayload[] = [];
+
+    for (const word of limitedWords) {
+        const relatedWordPayload = await resolveRelatedWordCached(
+            word,
+            runtime,
+            options,
+        );
+        warnings.push(...relatedWordPayload.warnings);
+        wordPayloads.push(relatedWordPayload.value);
+    }
+
+    return {
+        value: {
+            char: character,
+            relatedWords: wordPayloads,
+            components: relatedData.components,
+        },
+        warnings,
+    };
 }
 
 async function generateLapisFields(
@@ -191,6 +308,18 @@ async function generateLapisFields(
     );
 }
 
+function generateLapisFieldsCached(
+    expression: string,
+    runtime: LookupRuntime,
+): Promise<BuildAnkiNoteResult> {
+    let cached = runtime.cache.generatedFieldsByExpression.get(expression);
+    if (!cached) {
+        cached = generateLapisFields(expression, runtime);
+        runtime.cache.generatedFieldsByExpression.set(expression, cached);
+    }
+    return cached;
+}
+
 export function buildLegacyLapisNoteInput(
     expression: string,
     dictionaryInfo: DictionarySummary[],
@@ -200,10 +329,7 @@ export function buildLegacyLapisNoteInput(
     return {
         term: expression,
         enabledDictionaryMap: termDictionaryMap,
-        dictionaries: dictionaryInfo.map((dictionary) => ({
-            name: dictionary.title,
-            enabled: true,
-        })),
+        dictionaries: buildEnabledDictionaries(dictionaryInfo),
         dictionaryInfo,
         resultOutputMode: "group",
         dictionaryStylesMap,
@@ -269,15 +395,26 @@ function buildMainDefinitionTemplate(
     return templates.join("") || "{glossary-first}";
 }
 
+function resolveRelatedWordCached(
+    word: string,
+    runtime: LookupRuntime,
+    options: LookupOptions,
+): Promise<CachedValue<LookupRelatedWordPayload>> {
+    const cacheKey = `${word}\0${options.definitionDictionaryNames.join("\0")}\0${options.frequencyDictionaryNames.join("\0")}`;
+    let cached = runtime.cache.relatedWordByTerm.get(cacheKey);
+    if (!cached) {
+        cached = resolveRelatedWord(word, runtime, options);
+        runtime.cache.relatedWordByTerm.set(cacheKey, cached);
+    }
+    return cached;
+}
+
 async function resolveRelatedWord(
     word: string,
     runtime: LookupRuntime,
-    options: {
-        definitionDictionaryNames: string[];
-        frequencyDictionaryNames: string[];
-    },
-    warnings: string[],
-): Promise<LookupRelatedWordPayload> {
+    options: LookupOptions,
+): Promise<CachedValue<LookupRelatedWordPayload>> {
+    const warnings: string[] = [];
     const termEntry = await lookupBestTermEntry(word, runtime);
     if (termEntry) {
         const frequency = selectPreferredFrequency(
@@ -290,14 +427,21 @@ async function resolveRelatedWord(
         );
 
         return {
-            term: termEntry.headwords[0]?.term ?? word,
-            reading: termEntry.headwords[0]?.reading ?? "",
-            frequency,
-            entryHtml: await renderSelectedEntryHtml(
-                termEntry,
-                runtime.dictionaryStylesMap,
-                options.definitionDictionaryNames,
-            ),
+            value: {
+                term: termEntry.headwords[0]?.term ?? word,
+                reading: termEntry.headwords[0]?.reading ?? "",
+                frequency,
+                entryHtml: await renderRelatedWordEntryHtml(
+                    termEntry,
+                    word,
+                    runtime.core,
+                    runtime.dictionaryInfo,
+                    options.definitionDictionaryNames,
+                    runtime.dictionaryStylesMap,
+                    warnings,
+                ),
+            },
+            warnings,
         };
     }
 
@@ -309,23 +453,28 @@ async function resolveRelatedWord(
         );
         if (kanjiEntry) {
             return {
-                term: word,
-                reading: joinKanjiReadings(kanjiEntry),
-                frequency: { value: null, source: null },
-                entryHtml: renderFallbackKanjiHtml(kanjiEntry),
+                value: {
+                    term: word,
+                    reading: joinKanjiReadings(kanjiEntry),
+                    frequency: { value: null, source: null },
+                    entryHtml: renderFallbackKanjiHtml(kanjiEntry),
+                },
+                warnings,
             };
         }
     }
 
     warnings.push(`No dictionary entry found for related word "${word}".`);
     return {
-        term: word,
-        reading: "",
-        frequency: { value: null, source: null },
-        entryHtml: `<div class="lapis-lookup-empty">No dictionary entry found for ${escapeHtml(word)}.</div>`,
+        value: {
+            term: word,
+            reading: "",
+            frequency: { value: null, source: null },
+            entryHtml: `<div class="lapis-lookup-empty">No dictionary entry found for ${escapeHtml(word)}.</div>`,
+        },
+        warnings,
     };
 }
-
 async function lookupBestTermEntry(
     word: string,
     runtime: LookupRuntime,
@@ -384,6 +533,100 @@ async function lookupBestKanjiEntry(
         entries[0] ??
         null
     );
+}
+
+export async function renderRelatedWordEntryHtml(
+    termEntry: TermDictionaryEntry,
+    word: string,
+    core: YomitanCoreLike,
+    dictionaryInfo: DictionarySummary[],
+    preferredDefinitionNames: string[],
+    dictionaryStylesMap: Map<string, string>,
+    warnings: string[] = [],
+): Promise<string> {
+    const selectedTitle = selectPreferredTermDictionaryTitle(
+        termEntry,
+        preferredDefinitionNames,
+    );
+    if (!selectedTitle) {
+        return '<div class="lapis-lookup-empty">No dictionary definition available.</div>';
+    }
+
+    const result = await core.buildAnkiFieldsFromDictionaryEntry(
+        buildRelatedWordDefinitionInput(
+            termEntry,
+            word,
+            selectedTitle,
+            dictionaryInfo,
+            dictionaryStylesMap,
+        ),
+    );
+    warnings.push(...result.errors);
+
+    return (
+        result.fields.Definition ??
+        '<div class="lapis-lookup-empty">No dictionary definition available.</div>'
+    );
+}
+
+export function buildRelatedWordDefinitionInput(
+    termEntry: TermDictionaryEntry,
+    word: string,
+    selectedDictionaryTitle: string,
+    dictionaryInfo: DictionarySummary[],
+    dictionaryStylesMap: Map<string, string>,
+): AnkiFieldRenderInput & { dictionaryEntry: TermDictionaryEntry } {
+    return {
+        dictionaryEntry: termEntry,
+        dictionaries: buildEnabledDictionaries(dictionaryInfo),
+        dictionaryInfo,
+        resultOutputMode: "group",
+        dictionaryStylesMap,
+        cardFormat: {
+            deck: "Lapis",
+            model: "Lapis+Lookup",
+            fields: {
+                Definition: {
+                    value: buildSingleGlossaryMarker(selectedDictionaryTitle),
+                },
+            },
+        },
+        context: {
+            url: "",
+            query: word,
+            fullQuery: word,
+            documentTitle: "",
+        },
+    };
+}
+
+function selectPreferredTermDictionaryTitle(
+    termEntry: TermDictionaryEntry,
+    preferredDefinitionNames: string[],
+): string | null {
+    const availableTitles = [
+        ...new Set(
+            termEntry.definitions
+                .map(
+                    (definition) =>
+                        definition.dictionaryAlias || definition.dictionary,
+                )
+                .filter(Boolean),
+        ),
+    ];
+    return selectPreferredDictionaryTitle(
+        availableTitles,
+        preferredDefinitionNames,
+    );
+}
+
+function buildEnabledDictionaries(
+    dictionaryInfo: DictionarySummary[],
+): { name: string; enabled: boolean }[] {
+    return dictionaryInfo.map((dictionary) => ({
+        name: dictionary.title,
+        enabled: true,
+    }));
 }
 
 function extractUniqueKanji(expression: string): string[] {

@@ -1,12 +1,27 @@
 import { stdin as input, stdout as output } from "node:process";
-import { runLookup } from "./lookup.js";
+import { runLookup, streamLookupResults } from "./lookup.js";
 import type { LookupCliInput } from "./types.js";
 
 async function main(): Promise<void> {
     const payload = await readStdin();
     const parsedInput = JSON.parse(payload) as LookupCliInput;
+
+    if (parsedInput.streamResults) {
+        for await (const result of streamLookupResults(parsedInput)) {
+            await writeStreamItem(result);
+        }
+        return;
+    }
+
     const result = await runLookup(parsedInput);
     output.write(`${JSON.stringify(result)}\n`);
+}
+
+async function writeStreamItem(value: unknown): Promise<void> {
+    const frame = Buffer.from(JSON.stringify(value), "utf8").toString("base64");
+    if (!output.write(`${frame}\n`)) {
+        await new Promise<void>((resolve) => output.once("drain", resolve));
+    }
 }
 
 async function readStdin(): Promise<string> {

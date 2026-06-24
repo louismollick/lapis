@@ -54,31 +54,46 @@ export type BuildAnkiNoteResult =
           errors: string[];
       };
 
+export type BuildAnkiFieldsResult = {
+    fields: Record<string, string>;
+    errors: string[];
+};
+
+export type AnkiFieldRenderInput = {
+    dictionaries: { name: string; enabled: boolean }[];
+    dictionaryInfo: DictionarySummary[];
+    resultOutputMode?: "split" | "group" | "merge";
+    dictionaryStylesMap?: Map<string, string>;
+    cardFormat: {
+        deck: string;
+        model: string;
+        fields: Record<string, { value: string }>;
+    };
+    context: {
+        url: string;
+        query: string;
+        fullQuery: string;
+        documentTitle: string;
+    };
+    options?: Record<string, unknown>;
+};
+
 export interface YomitanCoreLike {
     initialize(): Promise<void>;
     dispose(): Promise<void>;
     importDictionary(archive: ArrayBuffer): Promise<unknown>;
     getDictionaryInfo(): Promise<DictionarySummary[]>;
-    buildAnkiNoteFromTerm(input: {
-        term: string;
-        enabledDictionaryMap: Map<string, unknown>;
-        dictionaries: { name: string; enabled: boolean }[];
-        dictionaryInfo: DictionarySummary[];
-        resultOutputMode?: "split" | "group" | "merge";
-        dictionaryStylesMap?: Map<string, string>;
-        cardFormat: {
-            deck: string;
-            model: string;
-            fields: Record<string, { value: string }>;
-        };
-        context: {
-            url: string;
-            query: string;
-            fullQuery: string;
-            documentTitle: string;
-        };
-        options?: Record<string, unknown>;
-    }): Promise<BuildAnkiNoteResult>;
+    buildAnkiNoteFromTerm(
+        input: AnkiFieldRenderInput & {
+            term: string;
+            enabledDictionaryMap: Map<string, unknown>;
+        },
+    ): Promise<BuildAnkiNoteResult>;
+    buildAnkiFieldsFromDictionaryEntry(
+        input: AnkiFieldRenderInput & {
+            dictionaryEntry: TermDictionaryEntry;
+        },
+    ): Promise<BuildAnkiFieldsResult>;
     findTerms(
         text: string,
         config: {

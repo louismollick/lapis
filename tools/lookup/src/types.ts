@@ -11,6 +11,7 @@ export type LookupCliInput = {
     maxWordsPerKanji?: number;
     definitionDictionaryNames?: string[];
     frequencyDictionaryNames?: string[];
+    streamResults?: boolean;
 };
 
 export type LookupFrequencyPayload = {
@@ -28,6 +29,7 @@ export type LookupRelatedWordPayload = {
 export type LookupKanjiPayload = {
     char: string;
     relatedWords: LookupRelatedWordPayload[];
+    components?: string[];
 };
 
 export type LookupCardPayload = {
@@ -45,6 +47,16 @@ export type LookupCliResultItem = {
     generatedFields?: Record<string, string>;
     warnings: string[];
 };
+
+export type LookupCliProgressItem = {
+    type: "progress";
+    completed: number;
+    total: number;
+    noteId: number;
+    expression: string;
+};
+
+export type LookupCliStreamItem = LookupCliProgressItem | LookupCliResultItem;
 
 export type LookupCliOutput = {
     results: LookupCliResultItem[];

@@ -1293,64 +1293,6 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
   white-space: normal;
 }
 
-.lapis-lookup-word-detail,
-.lapis-lookup-word-detail * {
-  text-align: left;
-}
-
-.lapis-lookup-word-detail .yomitan-glossary ul,
-.lapis-lookup-word-detail .yomitan-glossary ol {
-  display: block;
-  margin: 0 0 0.75em;
-  padding-left: 1.25em !important;
-}
-
-.lapis-lookup-word-detail .yomitan-glossary li {
-  display: list-item;
-}
-
-.lapis-lookup-word-detail .yomitan-glossary ul[data-sc-content="glossary"] {
-  list-style: disc;
-}
-
-.lapis-lookup-word-detail .yomitan-glossary ul[data-sc-content="glossary"] > li::before,
-.lapis-lookup-word-detail .yomitan-glossary ul[data-sc-content="glossary"] > li::after {
-  content: none !important;
-}
-
-.lapis-lookup-word-detail .yomitan-glossary [data-sc-content="extra-info"] > div,
-.lapis-lookup-word-detail .yomitan-glossary [data-sc-content="example-sentence"],
-.lapis-lookup-word-detail .yomitan-glossary [data-sc-content="example-sentence-a"],
-.lapis-lookup-word-detail .yomitan-glossary [data-sc-content="example-sentence-b"],
-.lapis-lookup-word-detail .yomitan-glossary [data-sc-content="attribution"] {
-  display: block;
-}
-
-.lapis-lookup-word-detail .yomitan-glossary [data-sc-content="attribution-footnote"] {
-  display: inline;
-}
-
-.lapis-lookup-word-detail p,
-.lapis-lookup-word-detail ul,
-.lapis-lookup-word-detail ol,
-.lapis-lookup-word-detail dl,
-.lapis-lookup-word-detail blockquote,
-.lapis-lookup-word-detail section,
-.lapis-lookup-word-detail figure,
-.lapis-lookup-word-detail table {
-  margin: 0 0 0.75em;
-}
-
-.lapis-lookup-word-detail li {
-  margin: 0.2em 0 0.2em 1.2em;
-}
-
-.lapis-lookup-word-detail br {
-  display: block;
-  content: "";
-  margin-top: 0.35em;
-}
-
 .vocab,
 .vocab ruby,
 .vocab ruby rb,
@@ -1364,30 +1306,33 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
   padding: 12px 0;
 }
 
-.lapis-lookup-word-detail .yomitan-glossary {
-    margin: 0;
+.lapis-lookup-components {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.lapis-lookup-definition-entry + .lapis-lookup-definition-entry {
-    margin-top: 16px;
-    padding-top: 16px;
-    border-top: 1px solid var(--bg-inset);
+.lapis-lookup-components-title {
+  color: var(--fg-subtle);
+  font-family: var(--font-sans);
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
-.lapis-lookup-definition-tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 10px;
+.lapis-lookup-component-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.lapis-lookup-definition-tag {
-    border-radius: 999px;
-    padding: 2px 8px;
-    background: var(--bg-inset);
-    color: var(--fg-subtle);
-    font-family: var(--font-sans);
-    font-size: 0.78em;
-    font-weight: 600;
+.lapis-lookup-component-chip {
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--bg-inset);
+  font-family: var(--font-serif);
+  line-height: 1.2;
 }
+
 /* lapis-lookup-v1:end */
