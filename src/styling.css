@@ -1185,6 +1185,15 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
   gap: 12px;
 }
 
+.lapis-lookup-sheet-header-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .lapis-lookup-back {
   appearance: none;
   border: 1px solid var(--fg-subtle);
@@ -1197,7 +1206,7 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
 }
 
 .lapis-lookup-sheet-title-wrap {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   text-align: left;
 }
@@ -1213,6 +1222,28 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
   font-family: var(--font-sans);
   font-size: 0.9em;
   margin-top: 4px;
+}
+
+.lapis-lookup-header-components {
+  flex: 0 1 45%;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.lapis-lookup-header-components-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.lapis-lookup-component-label {
+  color: var(--fg-subtle);
+  font-family: var(--font-sans);
+  font-size: 0.82em;
 }
 
 .lapis-lookup-sheet-body {
@@ -1306,33 +1337,43 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
   padding: 12px 0;
 }
 
-.lapis-lookup-components {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.lapis-lookup-components-title {
-  color: var(--fg-subtle);
-  font-family: var(--font-sans);
-  font-size: 0.85em;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
 .lapis-lookup-component-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .lapis-lookup-component-chip {
-  border-radius: 999px;
-  padding: 8px 12px;
+  min-width: 1.8em;
+  box-sizing: border-box;
+  border-radius: 8px;
+  padding: 5px 9px;
   background: var(--bg-elevated);
   box-shadow: inset 0 0 0 1px var(--bg-inset);
   font-family: var(--font-serif);
-  line-height: 1.2;
+  font-size: 0.95em;
+  line-height: 1.1;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .lapis-lookup-sheet-header-main {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .lapis-lookup-header-components {
+    width: 100%;
+    justify-content: flex-start;
+    padding-top: 0;
+  }
+
+  .lapis-lookup-header-components-inner,
+  .lapis-lookup-component-list {
+    justify-content: flex-start;
+  }
 }
 
 /* lapis-lookup-v1:end */

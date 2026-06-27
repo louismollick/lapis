@@ -11,7 +11,7 @@ import re
 import shutil
 import subprocess
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -29,6 +29,11 @@ from .generated_lookup_assets import (
     LOOKUP_CSS_BLOCK,
     LOOKUP_MARKUP_BLOCK,
     LOOKUP_SCRIPT_BLOCK,
+)
+from .lookup_store import (
+    merge_lookup_terms,
+    read_lookup_store_from_media,
+    write_lookup_store_to_media,
 )
 from .note_type_helpers import (
     CANONICAL_LAPIS_MODEL_NAME,
@@ -60,6 +65,7 @@ class BackfillSummary:
 @dataclass
 class BackfillState:
     canonical_model: dict[str, Any] | None = None
+    lookup_models_by_base_id: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
 def init() -> None:
@@ -89,11 +95,15 @@ def setup_and_backfill_selected_notes(browser: Browser) -> None:
         return
 
     config = load_config()
+    lookup_items = build_lookup_items(note_ids, mw.col)
 
     QueryOp(
         parent=browser,
-        op=lambda col: run_lookup_only(col, note_ids, config),
-        success=lambda summary: on_backfill_success(browser, summary),
+        op=lambda _col: run_lookup_only(lookup_items, config),
+        success=lambda results: on_backfill_success(
+            browser,
+            apply_backfill_results(mw.col, results),
+        ),
     ).with_progress("Preparing Lapis lookup...").run_in_background()
 
 
@@ -125,30 +135,16 @@ def diagnose_selected_notes(browser: Browser) -> None:
     showInfo("\n".join(lines).strip(), parent=browser)
 
 
-def run_lookup_only(col: Any, note_ids: Sequence[int], config: dict[str, Any]) -> BackfillSummary:
-    return run_lookup_cli(config, note_ids, col)
+def run_lookup_only(
+    lookup_items: Sequence[dict[str, Any]],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    return run_lookup_cli(config, lookup_items)
 
 
 def apply_backfill_results(col: Any, results: dict[str, Any]) -> BackfillSummary:
-    warnings: list[str] = []
-    processed = 0
-    converted = 0
-    skipped = 0
     state = BackfillState()
-
-    for item in results.get("results", []):
-        item_summary = apply_backfill_item(col, item, state)
-        processed += item_summary.processed
-        converted += item_summary.converted
-        skipped += item_summary.skipped
-        warnings.extend(item_summary.warnings)
-
-    return BackfillSummary(
-        processed=processed,
-        converted=converted,
-        skipped=skipped,
-        warnings=warnings,
-    )
+    return apply_pending_lookup_items(col, results.get("results", []), state)
 
 
 def on_backfill_success(browser: Browser, summary: BackfillSummary) -> None:
@@ -188,7 +184,7 @@ def apply_backfill_item(col: Any, item: dict[str, Any], state: BackfillState) ->
         write_generated_fields(note, item.get("generatedFields", {}))
         converted = 1
     elif not note_has_field(note, LOOKUP_FIELD_NAME):
-        ensure_lookup_model_for_notes(col, [note_id])
+        ensure_lookup_model_for_notes(col, [note_id], state=state)
         note = col.get_note(note_id)
 
     if not note_has_field(note, LOOKUP_FIELD_NAME) or "payload" not in item:
@@ -216,7 +212,12 @@ def apply_backfill_item(col: Any, item: dict[str, Any], state: BackfillState) ->
     return BackfillSummary(processed=1, converted=converted, skipped=0, warnings=warnings)
 
 
-def ensure_lookup_model_for_notes(col: Any, note_ids: Sequence[int]) -> None:
+def ensure_lookup_model_for_notes(
+    col: Any,
+    note_ids: Sequence[int],
+    *,
+    state: BackfillState | None = None,
+) -> None:
     for model_id, model_note_ids in partition_note_ids(col, note_ids).items():
         model = col.models.get(model_id)
         if not is_lapis_model(model):
@@ -224,8 +225,31 @@ def ensure_lookup_model_for_notes(col: Any, note_ids: Sequence[int]) -> None:
         if is_lookup_enabled_model(model):
             refresh_lookup_model(col, model)
             continue
-        target_model = clone_lookup_model(col, model)
+        target_model = get_or_create_lookup_model(col, model, state=state)
         convert_notes_to_model(col, model_note_ids, model, target_model)
+
+
+def get_or_create_lookup_model(
+    col: Any,
+    model: dict[str, Any],
+    *,
+    state: BackfillState | None = None,
+) -> dict[str, Any]:
+    model_id = int(model["id"])
+    if state is not None and model_id in state.lookup_models_by_base_id:
+        return state.lookup_models_by_base_id[model_id]
+
+    existing_model = find_lookup_model_for_base(col, model)
+    if existing_model is not None:
+        existing_model = refresh_lookup_model(col, existing_model)
+        if state is not None:
+            state.lookup_models_by_base_id[model_id] = existing_model
+        return existing_model
+
+    target_model = clone_lookup_model(col, model)
+    if state is not None:
+        state.lookup_models_by_base_id[model_id] = target_model
+    return target_model
 
 
 def clone_lookup_model(col: Any, model: dict[str, Any]) -> dict[str, Any]:
@@ -237,21 +261,35 @@ def clone_lookup_model(col: Any, model: dict[str, Any]) -> dict[str, Any]:
     return cloned
 
 
-def refresh_lookup_model(col: Any, model: dict[str, Any]) -> None:
+def find_lookup_model_for_base(col: Any, model: dict[str, Any]) -> dict[str, Any] | None:
+    target_name = f"{model['name']}+Lookup"
+    existing_models = col.models.all_names_and_ids()
+    model_id = next(
+        (item.id for item in existing_models if item.name == target_name),
+        None,
+    )
+    if model_id is None:
+        return None
+    lookup_model = col.models.get(model_id)
+    return lookup_model if is_lookup_enabled_model(lookup_model) else None
+
+
+def refresh_lookup_model(col: Any, model: dict[str, Any]) -> dict[str, Any]:
     base_model = find_base_model_for_lookup(col, model)
     if base_model:
         refreshed = col.models.copy(base_model, add=False)
         refreshed["id"] = model["id"]
         refreshed["name"] = model["name"]
         ensure_lookup_field(col, refreshed)
-        if apply_lookup_assets(refreshed):
-            col.models.update_dict(refreshed, skip_checks=True)
-        return
+        apply_lookup_assets(refreshed)
+        col.models.update_dict(refreshed, skip_checks=True)
+        return refreshed
 
     ensure_lookup_field(col, model)
     ensure_front_template(model)
     if apply_lookup_assets(model):
         col.models.update_dict(model, skip_checks=True)
+    return model
 
 
 def convert_notes_to_model(col: Any, note_ids: Sequence[int], old_model: dict[str, Any], new_model: dict[str, Any]) -> None:
@@ -462,7 +500,10 @@ def write_generated_fields(note: Any, generated_fields: dict[str, str]) -> None:
             note[field_name] = value
 
 
-def run_lookup_cli(config: dict[str, Any], note_ids: Sequence[int], col: Any) -> BackfillSummary:
+def run_lookup_cli(
+    config: dict[str, Any],
+    lookup_items: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
     repo_root = Path(config["lookup_repo_root"]).expanduser()
     tool_root = repo_root / "tools" / "lookup"
     cli_path = tool_root / "dist" / "src" / "cli.js"
@@ -474,7 +515,6 @@ def run_lookup_cli(config: dict[str, Any], note_ids: Sequence[int], col: Any) ->
     if not node:
         raise RuntimeError("node was not found on PATH.")
 
-    lookup_items = build_lookup_items(note_ids, col)
     options = {
         "maxWordsPerKanji": int(config.get("max_words_per_kanji", 12)),
         "definitionDictionaryNames": config.get("definition_dictionary_names", ["Jitendex"]),
@@ -484,41 +524,35 @@ def run_lookup_cli(config: dict[str, Any], note_ids: Sequence[int], col: Any) ->
     chunk_size = max(1, int(config.get("lookup_chunk_size", 100)))
     note_timeout_seconds = max(1, int(config.get("note_timeout_seconds", 90)))
 
-    update_lookup_progress(0, len(note_ids), "Starting Lapis lookup...")
+    update_lookup_progress(0, len(lookup_items), "Starting Lapis lookup...")
 
-    summary = BackfillSummary(processed=0, converted=0, skipped=0, warnings=[])
-    state = BackfillState()
+    results: list[dict[str, Any]] = []
     completed_count = 0
     index = 0
 
     while index < len(lookup_items):
         chunk_items = lookup_items[index : index + chunk_size]
-        chunk_summary = run_lookup_chunk(
+        chunk_result = run_lookup_chunk(
             node=node,
             cli_path=cli_path,
             tool_root=tool_root,
             payload={**options, "items": chunk_items},
             config=config,
-            col=col,
-            state=state,
             total_count=len(lookup_items),
             completed_count=completed_count,
             timeout_seconds=note_timeout_seconds,
         )
-        summary.processed += chunk_summary.summary.processed
-        summary.converted += chunk_summary.summary.converted
-        summary.skipped += chunk_summary.summary.skipped
-        summary.warnings.extend(chunk_summary.summary.warnings)
-        completed_count += chunk_summary.completed
-        index += chunk_summary.completed
+        results.extend(chunk_result.items)
+        completed_count += chunk_result.completed
+        index += chunk_result.completed
 
-    update_lookup_progress(completed_count, len(note_ids), "Finishing Lapis lookup...")
-    return summary
+    update_lookup_progress(completed_count, len(lookup_items), "Finishing Lapis lookup...")
+    return {"results": results}
 
 
 @dataclass
 class ChunkResult:
-    summary: BackfillSummary
+    items: list[dict[str, Any]]
     completed: int
 
 
@@ -529,8 +563,6 @@ def run_lookup_chunk(
     tool_root: Path,
     payload: dict[str, Any],
     config: dict[str, Any],
-    col: Any,
-    state: BackfillState,
     total_count: int,
     completed_count: int,
     timeout_seconds: int,
@@ -564,8 +596,8 @@ def run_lookup_chunk(
     process.stdin.write(json.dumps(payload, ensure_ascii=False))
     process.stdin.close()
 
-    summary = BackfillSummary(processed=0, converted=0, skipped=0, warnings=[])
     chunk_completed = 0
+    result_items: list[dict[str, Any]] = []
 
     while True:
         try:
@@ -576,16 +608,23 @@ def run_lookup_chunk(
             stderr_thread.join(timeout=1)
             stdout_thread.join(timeout=1)
             skipped_item = payload["items"][chunk_completed]
-            summary.skipped += 1
-            summary.warnings.append(
-                f"Skipped note {skipped_item['noteId']}: lookup for \"{skipped_item['expression']}\" exceeded {timeout_seconds} seconds."
+            result_items.append(
+                {
+                    "noteId": skipped_item["noteId"],
+                    "mode": skipped_item.get("mode", LOOKUP_ONLY_MODE),
+                    "status": "skipped",
+                    "expression": skipped_item.get("expression", ""),
+                    "warnings": [
+                        f"Skipped note {skipped_item['noteId']}: lookup for \"{skipped_item['expression']}\" exceeded {timeout_seconds} seconds."
+                    ],
+                }
             )
             update_lookup_progress(
                 completed_count + chunk_completed + 1,
                 total_count,
                 f"Skipped timed-out note {completed_count + chunk_completed + 1} of {total_count}",
             )
-            return ChunkResult(summary=summary, completed=chunk_completed + 1)
+            return ChunkResult(items=result_items, completed=chunk_completed + 1)
 
         if line is None:
             break
@@ -607,13 +646,9 @@ def run_lookup_chunk(
             )
             continue
 
-        item_summary = apply_backfill_item(col, item, state)
-        summary.processed += item_summary.processed
-        summary.converted += item_summary.converted
-        summary.skipped += item_summary.skipped
-        summary.warnings.extend(item_summary.warnings)
+        result_items.append(item)
         chunk_completed += 1
-        update_lookup_progress(completed_count + chunk_completed, total_count, f"Processed {completed_count + chunk_completed} of {total_count} notes...")
+        update_lookup_progress(completed_count + chunk_completed, total_count, f"Prepared {completed_count + chunk_completed} of {total_count} notes...")
 
     return_code = process.wait()
     stderr_thread.join(timeout=1)
@@ -626,7 +661,33 @@ def run_lookup_chunk(
             f"Lookup CLI exited before completing chunk: {chunk_completed} of {len(payload['items'])} note(s)."
         )
 
-    return ChunkResult(summary=summary, completed=chunk_completed)
+    return ChunkResult(items=result_items, completed=chunk_completed)
+
+
+def apply_pending_lookup_items(
+    col: Any,
+    items: Sequence[dict[str, Any]],
+    state: BackfillState,
+) -> BackfillSummary:
+    shared_terms: dict[str, Any] = {}
+    for item in items:
+        item_shared_terms = item.get("sharedTerms")
+        if isinstance(item_shared_terms, dict):
+            shared_terms.update(item_shared_terms)
+
+    summary = BackfillSummary(processed=0, converted=0, skipped=0, warnings=[])
+    if shared_terms:
+        store = merge_lookup_terms(read_lookup_store_from_media(col), shared_terms)
+        summary.warnings.extend(write_lookup_store_to_media(col, store))
+
+    for item in items:
+        item_summary = apply_backfill_item(col, item, state)
+        summary.processed += item_summary.processed
+        summary.converted += item_summary.converted
+        summary.skipped += item_summary.skipped
+        summary.warnings.extend(item_summary.warnings)
+
+    return summary
 
 
 def build_node_command(node: str, config: dict[str, Any], cli_path: Path) -> list[str]:

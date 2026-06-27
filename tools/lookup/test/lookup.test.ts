@@ -52,10 +52,7 @@ describe("legacy Lapis note input", () => {
             input.dictionaryStylesMap?.get("Jitendex.org [2026-06-06]"),
             ".term-glossary-list { color: red; }",
         );
-        assert.equal(
-            input.cardFormat.fields.MainDefinition.value,
-            "{single-glossary-jitendexorg-2026-06-06}{single-glossary-jmdict}",
-        );
+        assert.equal(input.cardFormat.fields.MainDefinition.value, "");
     });
 });
 
@@ -132,6 +129,9 @@ describe("streamed lookup helpers", () => {
 
         assert.equal(buildAnkiNoteCalls, 1);
         assert.equal(first.noteId, 1);
+        assert.equal(first.payload?.version, 2);
+        assert.deepEqual(first.payload?.kanji, []);
+        assert.deepEqual(first.sharedTerms, {});
         assert.equal(second.noteId, 2);
         assert.equal(second.generatedFields?.Expression, "かな");
     });
@@ -216,7 +216,23 @@ describe("related word definition rendering", () => {
             backTemplate,
             /detail\.className = "lapis-lookup-word-detail definition"/,
         );
-        assert.match(backTemplate, /function createKanjiComponentSection/);
+        assert.match(backTemplate, /src="_lapis_lookup_store\.js"/);
+        assert.equal(
+            [...backTemplate.matchAll(/src="_lapis_lookup_store[^"]*\.js"/g)]
+                .length,
+            1,
+        );
+        assert.match(backTemplate, /function stableLookupHash/);
+        assert.match(backTemplate, /function loadLookupShard/);
+        assert.match(backTemplate, /shardPromises: new Map\(\)/);
+        assert.doesNotMatch(
+            backTemplate,
+            /loadLegacySharedLookupTerms|__lapisLookupCompressedStore|legacyTerms/,
+        );
+        assert.match(backTemplate, /Array\.isArray\(kanjiItem\.relatedWords\)/);
+        assert.match(backTemplate, /kanjiItem\.wordRefs/);
+        assert.match(backTemplate, /function createKanjiComponentCluster/);
+        assert.match(backTemplate, /id="lapis-lookup-kanji-components"/);
         assert.doesNotMatch(
             css,
             /\.lapis-lookup-word-detail \.yomitan-glossary ul/,

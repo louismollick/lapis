@@ -85,16 +85,6 @@
             <div class="audio-buttons-alt"></div>
         </div>
 
-        {{#MiscInfo}}
-        <details>
-            <summary>Misc. info</summary>
-            <div class="misc-info">
-                === Details ===
-                <br />
-                {{MiscInfo}}
-            </div>
-        </details>
-        {{/MiscInfo}}
     </main>
 
     <!----------- Footer ------------->
@@ -107,18 +97,42 @@
             </div>
             {{/Tags}}
         </div>
+        {{#MiscInfo}}
+        <details>
+            <summary>Misc. info</summary>
+            <div class="misc-info">
+                === Details ===
+                <br />
+                {{MiscInfo}}
+            </div>
+        </details>
+        {{/MiscInfo}}
     </footer>
 
     <!-- lapis-lookup-v1:markup:start -->
+    <script>
+        window.__lapisLookupStoreShards = window.__lapisLookupStoreShards || {};
+        window.__lapisLookupInstallStore = store => {
+            if (store?.type === "shard" && Number.isInteger(store.shard)) {
+                window.__lapisLookupStoreShards[store.shard] = store;
+                return;
+            }
+            window.__lapisLookupStoreManifest = store;
+        };
+    </script>
+    <script src="_lapis_lookup_store.js"></script>
     <script id="lapis-lookup-data" type="application/json">{{text:KanjiLookupData}}</script>
     <!-- lapis-lookup-v1 -->
     <div id="lapis-lookup-overlay" class="lapis-lookup-overlay hidden">
         <section id="kanji-popover-view" class="lapis-lookup-sheet hidden">
             <div class="lapis-lookup-sheet-header">
                 <button type="button" id="lapis-lookup-kanji-back" class="lapis-lookup-back tappable">Back</button>
-                <div class="lapis-lookup-sheet-title-wrap">
-                    <div id="lapis-lookup-kanji-char" class="lapis-lookup-sheet-title"></div>
-                    <div id="lapis-lookup-kanji-subtitle" class="lapis-lookup-sheet-subtitle"></div>
+                <div class="lapis-lookup-sheet-header-main">
+                    <div class="lapis-lookup-sheet-title-wrap">
+                        <div id="lapis-lookup-kanji-char" class="lapis-lookup-sheet-title"></div>
+                        <div id="lapis-lookup-kanji-subtitle" class="lapis-lookup-sheet-subtitle"></div>
+                    </div>
+                    <div id="lapis-lookup-kanji-components" class="lapis-lookup-header-components hidden"></div>
                 </div>
             </div>
             <div id="lapis-lookup-kanji-body" class="lapis-lookup-sheet-body"></div>
@@ -136,7 +150,6 @@
         </section>
     </div>
     <!-- lapis-lookup-v1:markup:end -->
-
     <!------- Image modal --------->
     <div id="modal" class="tappable"></div>
 </div>
@@ -601,6 +614,149 @@
         }
     }
 
+    async function inflateBase64Json(payload) {
+        if (!payload || typeof DecompressionStream === "undefined") {
+            throw new Error("Lookup store decompression is unavailable.");
+        }
+
+        const binary = atob(payload);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index++) {
+            bytes[index] = binary.charCodeAt(index);
+        }
+
+        const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate"));
+        const text = await new Response(stream).text();
+        return JSON.parse(text);
+    }
+
+    function escapeLookupHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, character => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;",
+        }[character]));
+    }
+
+    function stableLookupHash(value) {
+        let result = 2166136261;
+        for (const character of String(value)) {
+            result ^= character.codePointAt(0);
+            result = Math.imul(result, 16777619) >>> 0;
+        }
+        return result >>> 0;
+    }
+
+    function getLookupStoreManifest() {
+        return window.__lapisLookupStoreManifest;
+    }
+
+    function lookupTermShard(term, manifest) {
+        return stableLookupHash(term) % (manifest?.shardCount || 64);
+    }
+
+    function lookupShardScriptName(shardIndex, manifest) {
+        const prefix = manifest?.shardPrefix || "_lapis_lookup_store_";
+        const suffix = manifest?.shardSuffix || ".js";
+        return `${prefix}${String(shardIndex).padStart(2, "0")}${suffix}`;
+    }
+
+    function loadLookupScript(src) {
+        return new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = src;
+            script.async = true;
+            script.dataset.lapisLookupShard = src;
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error(`Lookup store shard unavailable: ${src}`));
+            document.head.appendChild(script);
+        });
+    }
+
+    async function loadLookupShard(store, shardIndex, manifest) {
+        if (store.shardTerms.has(shardIndex)) return store.shardTerms.get(shardIndex);
+        if (store.shardPromises.has(shardIndex)) return store.shardPromises.get(shardIndex);
+
+        const promise = (async () => {
+            if (!manifest || manifest.type !== "manifest" || manifest.encoding !== "zlib+base64-json") {
+                throw new Error("Lookup store manifest is unavailable.");
+            }
+
+            await loadLookupScript(lookupShardScriptName(shardIndex, manifest));
+            const shardEnvelope = window.__lapisLookupStoreShards?.[shardIndex];
+            if (!shardEnvelope || shardEnvelope.encoding !== "zlib+base64-json" || !shardEnvelope.payload) {
+                throw new Error(`Lookup store shard ${shardIndex} did not install.`);
+            }
+
+            const shardStore = await inflateBase64Json(shardEnvelope.payload);
+            const terms = shardStore?.terms || {};
+            store.shardTerms.set(shardIndex, terms);
+            return terms;
+        })().catch(error => {
+            store.shardErrors.set(shardIndex, error);
+            return {};
+        });
+
+        store.shardPromises.set(shardIndex, promise);
+        return promise;
+    }
+
+    function createMissingRelatedWord(ref, message) {
+        const escapedRef = escapeLookupHtml(ref);
+        return {
+            ref,
+            term: ref,
+            reading: "",
+            frequency: { value: null, source: null },
+            entryHtml: `<div class="lapis-lookup-empty">${message} for ${escapedRef}.</div>`,
+        };
+    }
+
+    async function resolveRelatedWords(store, kanjiItem) {
+        if (Array.isArray(kanjiItem.relatedWords)) {
+            return kanjiItem.relatedWords.map(relatedWord => ({
+                ...relatedWord,
+                ref: relatedWord.term,
+            }));
+        }
+
+        const refs = Array.isArray(kanjiItem.wordRefs) ? kanjiItem.wordRefs : [];
+        if (!refs.length) return [];
+
+        const manifest = getLookupStoreManifest();
+        if (!manifest || manifest.type !== "manifest") {
+            return refs.map(ref => createMissingRelatedWord(ref, "Dictionary store unavailable"));
+        }
+
+        const refsByShard = new Map();
+        for (const ref of refs) {
+            const shardIndex = lookupTermShard(ref, manifest);
+            if (!refsByShard.has(shardIndex)) refsByShard.set(shardIndex, []);
+            refsByShard.get(shardIndex).push(ref);
+        }
+
+        const termsByRef = new Map();
+        await Promise.all([...refsByShard.keys()].map(async shardIndex => {
+            const terms = await loadLookupShard(store, shardIndex, manifest);
+            for (const ref of refsByShard.get(shardIndex)) {
+                if (terms[ref]) termsByRef.set(ref, terms[ref]);
+            }
+        }));
+
+        return refs.map(ref => {
+            const shardIndex = lookupTermShard(ref, manifest);
+            const relatedWord = termsByRef.get(ref);
+            const missingMessage = store.shardErrors.has(shardIndex)
+                ? "Dictionary store unavailable"
+                : "Dictionary entry unavailable";
+            return relatedWord
+                ? { ...relatedWord, ref }
+                : createMissingRelatedWord(ref, missingMessage);
+        });
+    }
+
     function isLookupKanji(character) {
         return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(character);
     }
@@ -617,6 +773,9 @@
         return {
             kanjiMap,
             currentKanji: null,
+            shardTerms: new Map(),
+            shardErrors: new Map(),
+            shardPromises: new Map(),
         };
     }
 
@@ -710,30 +869,29 @@
     }
 
     function buildKanjiSubtitle(kanjiItem) {
-        const parts = [];
-        const relatedWordCount = (kanjiItem.relatedWords || []).length;
+        const relatedWordCount = (kanjiItem.relatedWords || kanjiItem.wordRefs || []).length;
         const componentCount = (kanjiItem.components || []).length;
         if (relatedWordCount > 0) {
-            parts.push(`${relatedWordCount} related words`);
+            return `${relatedWordCount} related words`;
         }
         if (componentCount > 0) {
-            parts.push(`${componentCount} components`);
+            return `${componentCount} component${componentCount === 1 ? "" : "s"}`;
         }
-        return parts.join(" | ") || "No related data";
+        return "No related data";
     }
 
-    function createKanjiComponentSection(kanjiItem) {
+    function createKanjiComponentCluster(kanjiItem) {
         if (!Array.isArray(kanjiItem.components) || kanjiItem.components.length === 0) {
             return null;
         }
 
-        const section = document.createElement("section");
-        section.className = "lapis-lookup-components";
+        const cluster = document.createElement("div");
+        cluster.className = "lapis-lookup-header-components-inner";
 
-        const heading = document.createElement("div");
-        heading.className = "lapis-lookup-components-title";
-        heading.textContent = "Components";
-        section.appendChild(heading);
+        const label = document.createElement("span");
+        label.className = "lapis-lookup-component-label";
+        label.textContent = "Components";
+        cluster.appendChild(label);
 
         const list = document.createElement("div");
         list.className = "lapis-lookup-component-list";
@@ -745,42 +903,52 @@
             list.appendChild(item);
         }
 
-        section.appendChild(list);
-        return section;
+        cluster.appendChild(list);
+        return cluster;
     }
 
-    function renderKanjiPopover(store, kanjiItem) {
+    async function renderKanjiPopover(store, kanjiItem) {
         const title = document.getElementById("lapis-lookup-kanji-char");
         const subtitle = document.getElementById("lapis-lookup-kanji-subtitle");
+        const components = document.getElementById("lapis-lookup-kanji-components");
         const body = document.getElementById("lapis-lookup-kanji-body");
-        if (!title || !subtitle || !body) return;
+        if (!title || !subtitle || !components || !body) return;
 
         title.textContent = kanjiItem.char;
         subtitle.textContent = buildKanjiSubtitle(kanjiItem);
+        components.innerHTML = "";
+        components.classList.add("hidden");
         body.innerHTML = "";
+
+        const componentCluster = createKanjiComponentCluster(kanjiItem);
+        if (componentCluster) {
+            components.appendChild(componentCluster);
+            components.classList.remove("hidden");
+        }
 
         const list = document.createElement("div");
         list.className = "lapis-lookup-word-list";
+        const relatedWords = await resolveRelatedWords(store, kanjiItem);
 
-        for (const relatedWord of kanjiItem.relatedWords || []) {
+        for (const relatedWord of relatedWords) {
             const button = document.createElement("button");
             button.type = "button";
             button.className = "lapis-lookup-word-row tappable";
-            bindPrimaryActivate(button, () => openWordPopover(store, kanjiItem.char, relatedWord.term));
+            bindPrimaryActivate(button, () => openWordPopover(store, kanjiItem.char, relatedWord.ref));
 
             const left = document.createElement("div");
             left.className = "lapis-lookup-word-main";
             left.innerHTML = `
-                <span class="lapis-lookup-word-term">${relatedWord.term}</span>
-                ${relatedWord.reading ? `<span class="lapis-lookup-word-reading">${relatedWord.reading}</span>` : ""}
+                <span class="lapis-lookup-word-term">${escapeLookupHtml(relatedWord.term)}</span>
+                ${relatedWord.reading ? `<span class="lapis-lookup-word-reading">${escapeLookupHtml(relatedWord.reading)}</span>` : ""}
             `;
 
             const right = document.createElement("div");
             right.className = "lapis-lookup-word-meta";
             if (relatedWord.frequency?.value !== null && relatedWord.frequency?.value !== undefined) {
                 right.innerHTML = `
-                    <span class="lapis-lookup-word-frequency">${relatedWord.frequency.value}</span>
-                    <span class="lapis-lookup-word-frequency-source">${relatedWord.frequency.source || ""}</span>
+                    <span class="lapis-lookup-word-frequency">${escapeLookupHtml(relatedWord.frequency.value)}</span>
+                    <span class="lapis-lookup-word-frequency-source">${escapeLookupHtml(relatedWord.frequency.source || "")}</span>
                 `;
             }
 
@@ -789,15 +957,13 @@
             list.appendChild(button);
         }
 
-        const componentSection = createKanjiComponentSection(kanjiItem);
-
         if (list.children.length) {
             body.appendChild(list);
         }
-        if (componentSection) {
-            body.appendChild(componentSection);
+        if (!list.children.length && componentCluster) {
+            body.innerHTML = `<div class="lapis-lookup-empty">No related words available.</div>`;
         }
-        if (!list.children.length && !componentSection) {
+        if (!list.children.length && !componentCluster) {
             body.innerHTML = `<div class="lapis-lookup-empty">No related data available.</div>`;
         }
     }
@@ -819,22 +985,25 @@
         body.innerHTML = "";
         const detail = document.createElement("div");
         detail.className = "lapis-lookup-word-detail definition";
-        detail.innerHTML = relatedWord.entryHtml || `<div class="lapis-lookup-empty">No dictionary entry available for ${relatedWord.term}.</div>`;
+        detail.innerHTML = relatedWord.entryHtml || `<div class="lapis-lookup-empty">No dictionary entry available for ${escapeLookupHtml(relatedWord.term)}.</div>`;
         body.appendChild(detail);
     }
 
-    function openKanjiPopover(store, kanji) {
+    async function openKanjiPopover(store, kanji) {
         const kanjiItem = store?.kanjiMap.get(kanji);
         if (!kanjiItem) return;
         store.currentKanji = kanji;
-        renderKanjiPopover(store, kanjiItem);
+        await renderKanjiPopover(store, kanjiItem);
         showLookupSheet("kanji-popover-view");
     }
 
-    function openWordPopover(store, kanji, term) {
+    async function openWordPopover(store, kanji, ref) {
         const kanjiItem = store?.kanjiMap.get(kanji);
-        const relatedWord = kanjiItem?.relatedWords?.find(item => item.term === term);
-        if (!kanjiItem || !relatedWord) return;
+        if (!kanjiItem) return;
+
+        const relatedWords = await resolveRelatedWords(store, kanjiItem);
+        const relatedWord = relatedWords.find(item => item.ref === ref || item.term === ref);
+        if (!relatedWord) return;
 
         store.currentKanji = kanji;
         renderWordPopover(store, kanjiItem, relatedWord);
@@ -847,7 +1016,7 @@
         const wordBack = document.getElementById("lapis-lookup-word-back");
 
         bindPrimaryActivate(kanjiBack, () => closeLookupOverlay(store));
-        bindPrimaryActivate(wordBack, () => {
+        bindPrimaryActivate(wordBack, async () => {
             if (!store.currentKanji) {
                 closeLookupOverlay(store);
                 return;
@@ -857,7 +1026,7 @@
                 closeLookupOverlay(store);
                 return;
             }
-            renderKanjiPopover(store, kanjiItem);
+            await renderKanjiPopover(store, kanjiItem);
             showLookupSheet("kanji-popover-view");
         });
     }

@@ -28,15 +28,17 @@ export type LookupRelatedWordPayload = {
 
 export type LookupKanjiPayload = {
     char: string;
-    relatedWords: LookupRelatedWordPayload[];
+    wordRefs: string[];
     components?: string[];
 };
 
 export type LookupCardPayload = {
-    version: 1;
+    version: 2;
     expression: string;
     kanji: LookupKanjiPayload[];
 };
+
+export type LookupSharedTermsPayload = Record<string, LookupRelatedWordPayload>;
 
 export type LookupCliResultItem = {
     noteId: number;
@@ -44,6 +46,7 @@ export type LookupCliResultItem = {
     status: "ok" | "skipped";
     expression: string;
     payload?: LookupCardPayload;
+    sharedTerms?: LookupSharedTermsPayload;
     generatedFields?: Record<string, string>;
     warnings: string[];
 };

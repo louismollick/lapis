@@ -11,7 +11,6 @@ import {
     buildTermDictionaryMap,
     ensureDictionaryArchivesPresent,
     importSuggestedDictionaries,
-    normalizeDictionaryTitle,
     selectPreferredDictionaryTitle,
     selectPreferredFrequency,
 } from "./dictionaries.js";
@@ -27,6 +26,7 @@ import type {
     LookupCliStreamItem,
     LookupKanjiPayload,
     LookupRelatedWordPayload,
+    LookupSharedTermsPayload,
 } from "./types.js";
 import type {
     AnkiFieldRenderInput,
@@ -58,10 +58,20 @@ type CachedValue<T> = {
     warnings: string[];
 };
 
+type LookupPayloadBuild = {
+    payload: LookupCardPayload;
+    sharedTerms: LookupSharedTermsPayload;
+};
+
+type LookupKanjiBuild = {
+    kanji: LookupKanjiPayload;
+    sharedTerms: LookupSharedTermsPayload;
+};
+
 type LookupCache = {
     generatedFieldsByExpression: Map<string, Promise<BuildAnkiNoteResult>>;
-    payloadByExpression: Map<string, Promise<CachedValue<LookupCardPayload>>>;
-    kanjiByCharacter: Map<string, Promise<CachedValue<LookupKanjiPayload>>>;
+    payloadByExpression: Map<string, Promise<CachedValue<LookupPayloadBuild>>>;
+    kanjiByCharacter: Map<string, Promise<CachedValue<LookupKanjiBuild>>>;
     relatedWordByTerm: Map<
         string,
         Promise<CachedValue<LookupRelatedWordPayload>>
@@ -199,7 +209,8 @@ export async function buildLookupResult(
         status: "ok",
         expression,
         generatedFields,
-        payload: cachedPayload.value,
+        payload: cachedPayload.value.payload,
+        sharedTerms: cachedPayload.value.sharedTerms,
         warnings,
     };
 }
@@ -208,7 +219,7 @@ function buildLookupPayloadCached(
     expression: string,
     runtime: LookupRuntime,
     options: LookupOptions,
-): Promise<CachedValue<LookupCardPayload>> {
+): Promise<CachedValue<LookupPayloadBuild>> {
     const cacheKey = `${expression}\0${options.maxWordsPerKanji}\0${options.definitionDictionaryNames.join("\0")}\0${options.frequencyDictionaryNames.join("\0")}`;
     let cached = runtime.cache.payloadByExpression.get(cacheKey);
     if (!cached) {
@@ -222,11 +233,12 @@ async function buildLookupPayload(
     expression: string,
     runtime: LookupRuntime,
     options: LookupOptions,
-): Promise<CachedValue<LookupCardPayload>> {
+): Promise<CachedValue<LookupPayloadBuild>> {
     const warnings: string[] = [];
     const kanjiCharacters = extractUniqueKanji(expression);
+    const sharedTerms: LookupSharedTermsPayload = {};
     const payload: LookupCardPayload = {
-        version: 1,
+        version: 2,
         expression,
         kanji: [],
     };
@@ -239,19 +251,18 @@ async function buildLookupPayload(
         );
         warnings.push(...cachedKanji.warnings);
 
-        payload.kanji.push({
-            ...cachedKanji.value,
-        });
+        payload.kanji.push(cachedKanji.value.kanji);
+        Object.assign(sharedTerms, cachedKanji.value.sharedTerms);
     }
 
-    return { value: payload, warnings };
+    return { value: { payload, sharedTerms }, warnings };
 }
 
 function buildKanjiRelatedWordsCached(
     character: string,
     runtime: LookupRuntime,
     options: LookupOptions,
-): Promise<CachedValue<LookupKanjiPayload>> {
+): Promise<CachedValue<LookupKanjiBuild>> {
     const cacheKey = `${character}\0${options.maxWordsPerKanji}\0${options.definitionDictionaryNames.join("\0")}\0${options.frequencyDictionaryNames.join("\0")}`;
     let cached = runtime.cache.kanjiByCharacter.get(cacheKey);
     if (!cached) {
@@ -265,14 +276,15 @@ async function buildKanjiRelatedWords(
     character: string,
     runtime: LookupRuntime,
     options: LookupOptions,
-): Promise<CachedValue<LookupKanjiPayload>> {
+): Promise<CachedValue<LookupKanjiBuild>> {
     const warnings: string[] = [];
     const relatedData = await getRelatedDataForKanji(character);
     const limitedWords = relatedData.relatedWords.slice(
         0,
         options.maxWordsPerKanji,
     );
-    const wordPayloads: LookupRelatedWordPayload[] = [];
+    const wordRefs: string[] = [];
+    const sharedTerms: LookupSharedTermsPayload = {};
 
     for (const word of limitedWords) {
         const relatedWordPayload = await resolveRelatedWordCached(
@@ -281,14 +293,18 @@ async function buildKanjiRelatedWords(
             options,
         );
         warnings.push(...relatedWordPayload.warnings);
-        wordPayloads.push(relatedWordPayload.value);
+        wordRefs.push(word);
+        sharedTerms[word] = relatedWordPayload.value;
     }
 
     return {
         value: {
-            char: character,
-            relatedWords: wordPayloads,
-            components: relatedData.components,
+            kanji: {
+                char: character,
+                wordRefs,
+                components: relatedData.components,
+            },
+            sharedTerms,
         },
         warnings,
     };
@@ -357,7 +373,7 @@ export function buildLegacyLapisNoteInput(
 }
 
 function buildLapisFieldTemplates(
-    dictionaryInfo: DictionarySummary[],
+    _dictionaryInfo: DictionarySummary[],
 ): Record<string, string> {
     return {
         Expression: "{expression}",
@@ -365,7 +381,7 @@ function buildLapisFieldTemplates(
         ExpressionReading: "{reading}",
         ExpressionAudio: "{audio}",
         SelectionText: "{popup-selection-text}",
-        MainDefinition: buildMainDefinitionTemplate(dictionaryInfo),
+        MainDefinition: "",
         Sentence: "{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}",
         Glossary: "{glossary}",
         PitchPosition: "{pitch-accent-positions}",
@@ -374,25 +390,6 @@ function buildLapisFieldTemplates(
         FreqSort: "{frequency-harmonic-rank}",
         MiscInfo: "{document-title}",
     };
-}
-
-function buildMainDefinitionTemplate(
-    dictionaryInfo: DictionarySummary[],
-): string {
-    const titleMap = new Map(
-        dictionaryInfo.map((dictionary) => [
-            normalizeDictionaryTitle(dictionary.title),
-            dictionary.title,
-        ]),
-    );
-    const preferredTitles = [
-        titleMap.get("jitendex") ?? "",
-        titleMap.get("jmdict") ?? "",
-    ].filter(Boolean);
-    const templates = preferredTitles.map((title) =>
-        buildSingleGlossaryMarker(title),
-    );
-    return templates.join("") || "{glossary-first}";
 }
 
 function resolveRelatedWordCached(
