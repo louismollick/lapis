@@ -41,6 +41,19 @@ class LookupStoreTest(unittest.TestCase):
 
 
 class BackfillApplicationTest(unittest.TestCase):
+    def test_init_registers_hooks_once(self) -> None:
+        addon = load_addon()
+        addon.gui_hooks.browser_menus_did_init.clear()
+        addon.gui_hooks.add_cards_did_add_note.clear()
+        addon.anki_hooks.note_will_be_added.clear()
+
+        addon.init()
+        addon.init()
+
+        self.assertEqual(addon.gui_hooks.browser_menus_did_init, [addon.add_browser_menu])
+        self.assertEqual(addon.gui_hooks.add_cards_did_add_note, [addon.on_add_cards_did_add_note])
+        self.assertEqual(addon.anki_hooks.note_will_be_added, [addon.on_note_will_be_added])
+
     def test_mixed_legacy_and_lapis_backfill_use_one_canonical_lookup_model(self) -> None:
         addon = load_addon()
         col = FakeCollection()
@@ -322,6 +335,45 @@ class BackfillApplicationTest(unittest.TestCase):
         self.assertIn("Failed: 1", report)
         self.assertIn("Note 101 (粒子): lookup payload missing", report)
 
+    def test_manual_setup_uses_shared_lookup_job(self) -> None:
+        addon = load_addon()
+        col = FakeCollection()
+        addon.mw.col = col
+        legacy_model = col.models.add_model(
+            {
+                "id": 1,
+                "name": "Legacy Mining",
+                "flds": [{"name": "Front"}, {"name": "Back"}],
+                "tmpls": [{"name": "Card 1", "afmt": "{{Front}}", "qfmt": "{{Front}}"}],
+                "css": "",
+                "sortf": 0,
+            }
+        )
+        lapis_model = col.models.add_model(build_lapis_model(2, "Lapis"))
+        col.notes[101] = FakeNote(101, legacy_model["id"], col, {"Front": "粒子"})
+        col.notes[102] = FakeNote(102, lapis_model["id"], col, {"Expression": "銀"})
+        calls: list[dict] = []
+
+        def fake_start_lookup_job(**kwargs) -> None:
+            calls.append(kwargs)
+
+        original_start_lookup_job = addon.start_lookup_job
+        addon.start_lookup_job = fake_start_lookup_job
+        try:
+            browser = FakeBrowser([101, 102])
+            addon.setup_and_backfill_selected_notes(browser)
+        finally:
+            addon.start_lookup_job = original_start_lookup_job
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            calls[0]["lookup_items"],
+            [
+                {"noteId": 101, "mode": addon.LEGACY_CONVERT_MODE, "expression": "粒子"},
+                {"noteId": 102, "mode": addon.LOOKUP_ONLY_MODE, "expression": "銀"},
+            ],
+        )
+
     def test_debug_bundle_includes_raw_fields_and_lookup_store_media(self) -> None:
         addon = load_addon()
         lookup_store = importlib.import_module("anki_addon.lapis_lookup.lookup_store")
@@ -365,6 +417,200 @@ class BackfillApplicationTest(unittest.TestCase):
             self.assertTrue((bundle_path / lookup_store.LOOKUP_STORE_MEDIA_NAME).exists())
             self.assertTrue(any(bundle_path.glob("_lapis_lookup_store_*.js")))
             self.assertTrue((bundle_path / "notes" / "note_101.html").exists())
+
+
+class AutoBackfillTest(unittest.TestCase):
+    def test_collection_hook_drains_after_note_gets_id(self) -> None:
+        addon = load_addon()
+        col = FakeCollection()
+        addon.mw.col = col
+        addon.reset_auto_backfill_queue()
+        lapis_model = col.models.add_model(build_lapis_model(1, "Lapis"))
+        note = FakeNote(0, lapis_model["id"], col, {"Expression": "超人"})
+        calls: list[int] = []
+
+        original_enqueue = addon.enqueue_auto_backfill_note_id
+        addon.enqueue_auto_backfill_note_id = lambda _col, note_id: calls.append(note_id)
+        try:
+            addon.on_note_will_be_added(col, note, None)
+            self.assertEqual(calls, [])
+            note.id = 101
+            addon.drain_pending_added_notes()
+        finally:
+            addon.enqueue_auto_backfill_note_id = original_enqueue
+
+        self.assertEqual(calls, [101])
+        self.assertEqual(addon.PENDING_ADDED_NOTES, [])
+
+    def test_auto_backfill_eligibility_rules(self) -> None:
+        addon = load_addon()
+        col = FakeCollection()
+        addon.mw.col = col
+        legacy_model = col.models.add_model(
+            {
+                "id": 1,
+                "name": "Legacy Mining",
+                "flds": [{"name": "Front"}, {"name": "Back"}],
+                "tmpls": [{"name": "Card 1", "afmt": "{{Front}}", "qfmt": "{{Front}}"}],
+                "css": "",
+                "sortf": 0,
+            }
+        )
+        lapis_model = col.models.add_model(build_lapis_model(2, "Lapis"))
+        lookup_model = addon.create_canonical_lookup_model(col)
+        col.notes[101] = FakeNote(101, legacy_model["id"], col, {"Front": "粒子"})
+        col.notes[102] = FakeNote(102, lapis_model["id"], col, {"Expression": ""})
+        col.notes[103] = FakeNote(103, lookup_model["id"], col, {"Expression": "銀", addon.LOOKUP_FIELD_NAME: '{"version":2}'})
+        col.notes[104] = FakeNote(104, lapis_model["id"], col, {"Expression": "超人"})
+
+        self.assertFalse(addon.is_auto_backfill_note_id_eligible(col, 101))
+        self.assertFalse(addon.is_auto_backfill_note_id_eligible(col, 102))
+        self.assertFalse(addon.is_auto_backfill_note_id_eligible(col, 103))
+        self.assertTrue(addon.is_auto_backfill_note_id_eligible(col, 104))
+
+    def test_first_auto_backfill_note_starts_job(self) -> None:
+        addon = load_addon()
+        col = FakeCollection()
+        addon.mw.col = col
+        addon.reset_auto_backfill_queue()
+        lapis_model = col.models.add_model(build_lapis_model(1, "Lapis"))
+        col.notes[101] = FakeNote(101, lapis_model["id"], col, {"Expression": "超人"})
+        calls: list[dict] = []
+
+        def fake_start_lookup_job(**kwargs) -> None:
+            calls.append(kwargs)
+
+        original_start_lookup_job = addon.start_lookup_job
+        addon.start_lookup_job = fake_start_lookup_job
+        try:
+            addon.enqueue_auto_backfill_note_id(col, 101)
+        finally:
+            addon.start_lookup_job = original_start_lookup_job
+
+        self.assertTrue(addon.AUTO_BACKFILL_QUEUE.running)
+        self.assertEqual(addon.AUTO_BACKFILL_QUEUE.pending_note_ids, [])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["lookup_items"], [{"noteId": 101, "mode": addon.LOOKUP_ONLY_MODE, "expression": "超人"}])
+
+    def test_auto_backfill_queues_note_added_while_run_active(self) -> None:
+        addon = load_addon()
+        col = FakeCollection()
+        addon.mw.col = col
+        addon.reset_auto_backfill_queue()
+        lapis_model = col.models.add_model(build_lapis_model(1, "Lapis"))
+        col.notes[101] = FakeNote(101, lapis_model["id"], col, {"Expression": "超人"})
+        col.notes[102] = FakeNote(102, lapis_model["id"], col, {"Expression": "粒子"})
+        calls: list[dict] = []
+
+        def fake_start_lookup_job(**kwargs) -> None:
+            calls.append(kwargs)
+
+        original_start_lookup_job = addon.start_lookup_job
+        addon.start_lookup_job = fake_start_lookup_job
+        try:
+            addon.enqueue_auto_backfill_note_id(col, 101)
+            addon.enqueue_auto_backfill_note_id(col, 102)
+        finally:
+            addon.start_lookup_job = original_start_lookup_job
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(addon.AUTO_BACKFILL_QUEUE.pending_note_ids, [102])
+
+    def test_auto_backfill_processes_followup_batch_after_success(self) -> None:
+        addon = load_addon()
+        col = FakeCollection()
+        addon.mw.col = col
+        addon.reset_auto_backfill_queue()
+        lapis_model = col.models.add_model(build_lapis_model(1, "Lapis"))
+        col.notes[101] = FakeNote(101, lapis_model["id"], col, {"Expression": "超人"})
+        col.notes[102] = FakeNote(102, lapis_model["id"], col, {"Expression": "粒子"})
+        col.notes[103] = FakeNote(103, lapis_model["id"], col, {"Expression": "銀"})
+        calls: list[dict] = []
+
+        def fake_start_lookup_job(**kwargs) -> None:
+            calls.append(kwargs)
+
+        original_start_lookup_job = addon.start_lookup_job
+        original_show_warning = addon.showWarning
+        addon.start_lookup_job = fake_start_lookup_job
+        addon.showWarning = lambda *_args, **_kwargs: None
+        try:
+            addon.enqueue_auto_backfill_note_id(col, 101)
+            addon.enqueue_auto_backfill_note_id(col, 102)
+            addon.enqueue_auto_backfill_note_id(col, 103)
+            calls[0]["success"](lookup_results(addon, 101, "超人"))
+        finally:
+            addon.start_lookup_job = original_start_lookup_job
+            addon.showWarning = original_show_warning
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            calls[1]["lookup_items"],
+            [
+                {"noteId": 102, "mode": addon.LOOKUP_ONLY_MODE, "expression": "粒子"},
+                {"noteId": 103, "mode": addon.LOOKUP_ONLY_MODE, "expression": "銀"},
+            ],
+        )
+        self.assertTrue(addon.AUTO_BACKFILL_QUEUE.running)
+
+    def test_auto_backfill_converts_base_lapis_note_and_writes_lookup_data(self) -> None:
+        addon = load_addon()
+        col = FakeCollection()
+        addon.mw.col = col
+        addon.reset_auto_backfill_queue()
+        lapis_model = col.models.add_model(build_lapis_model(1, "Lapis"))
+        col.notes[101] = FakeNote(101, lapis_model["id"], col, {"Expression": "粒子"})
+
+        def fake_start_lookup_job(**kwargs) -> None:
+            kwargs["success"](lookup_results(addon, 101, "粒子"))
+
+        original_start_lookup_job = addon.start_lookup_job
+        original_show_warning = addon.showWarning
+        addon.start_lookup_job = fake_start_lookup_job
+        addon.showWarning = lambda *_args, **_kwargs: None
+        try:
+            addon.on_add_cards_did_add_note(col.notes[101])
+        finally:
+            addon.start_lookup_job = original_start_lookup_job
+            addon.showWarning = original_show_warning
+
+        self.assertFalse(addon.AUTO_BACKFILL_QUEUE.running)
+        self.assertEqual(addon.AUTO_BACKFILL_QUEUE.pending_note_ids, [])
+        self.assertNotEqual(col.notes[101].mid, lapis_model["id"])
+        self.assertTrue(addon.note_has_field(col.notes[101], addon.LOOKUP_FIELD_NAME))
+        self.assertIn('"version":2', col.notes[101][addon.LOOKUP_FIELD_NAME])
+
+    def test_auto_backfill_repairs_stale_canonical_model_before_write(self) -> None:
+        addon = load_addon()
+        col = FakeCollection()
+        addon.mw.col = col
+        addon.reset_auto_backfill_queue()
+        lookup_model = addon.create_canonical_lookup_model(col)
+        lookup_model["tmpls"][0]["qfmt"] = "{{Expression}} stale"
+        col.models.update_dict(lookup_model)
+        col.notes[101] = FakeNote(
+            101,
+            lookup_model["id"],
+            col,
+            {"Expression": "粒子", addon.LOOKUP_FIELD_NAME: ""},
+        )
+
+        def fake_start_lookup_job(**kwargs) -> None:
+            kwargs["success"](lookup_results(addon, 101, "粒子"))
+
+        original_start_lookup_job = addon.start_lookup_job
+        original_show_warning = addon.showWarning
+        addon.start_lookup_job = fake_start_lookup_job
+        addon.showWarning = lambda *_args, **_kwargs: None
+        try:
+            addon.on_add_cards_did_add_note(col.notes[101])
+        finally:
+            addon.start_lookup_job = original_start_lookup_job
+            addon.showWarning = original_show_warning
+
+        synced_model = col.models.get(col.notes[101].mid)
+        self.assertEqual(synced_model["tmpls"][0]["qfmt"], addon.FRONT_TEMPLATE)
+        self.assertIn('"version":2', col.notes[101][addon.LOOKUP_FIELD_NAME])
 
 
 class FakeCollection:
@@ -535,9 +781,37 @@ def build_lapis_model(model_id: int, name: str) -> dict:
     }
 
 
+def lookup_results(addon, note_id: int, expression: str) -> dict:
+    return {
+        "results": [
+            {
+                "noteId": note_id,
+                "mode": addon.LOOKUP_ONLY_MODE,
+                "status": "ok",
+                "expression": expression,
+                "payload": {"version": 2, "expression": expression, "kanji": []},
+            }
+        ]
+    }
+
+
+class FakeBrowser:
+    def __init__(self, note_ids: list[int]) -> None:
+        self._note_ids = note_ids
+
+    def selected_notes(self) -> list[int]:
+        return list(self._note_ids)
+
+    def search(self) -> None:
+        return None
+
+
 def load_addon():
     install_aqt_stubs()
-    return importlib.import_module("anki_addon.lapis_lookup.addon")
+    addon = importlib.import_module("anki_addon.lapis_lookup.addon")
+    addon.reset_auto_backfill_queue()
+    flush_qt_timers()
+    return addon
 
 
 def install_aqt_stubs() -> None:
@@ -545,7 +819,7 @@ def install_aqt_stubs() -> None:
         return
 
     aqt = types.ModuleType("aqt")
-    aqt.gui_hooks = SimpleNamespace(browser_menus_did_init=[])
+    aqt.gui_hooks = SimpleNamespace(browser_menus_did_init=[], add_cards_did_add_note=[])
     aqt.mw = SimpleNamespace(
         taskman=None,
         addonManager=SimpleNamespace(getConfig=lambda _name: {}),
@@ -563,6 +837,7 @@ def install_aqt_stubs() -> None:
     qt = types.ModuleType("aqt.qt")
     qt.QAction = object
     qt.QMenu = object
+    qt.QTimer = FakeQTimer
     qt.qconnect = lambda *_args: None
     sys.modules["aqt.qt"] = qt
 
@@ -571,6 +846,28 @@ def install_aqt_stubs() -> None:
     utils.showWarning = lambda *_args, **_kwargs: None
     utils.tooltip = lambda *_args, **_kwargs: None
     sys.modules["aqt.utils"] = utils
+
+    anki = types.ModuleType("anki")
+    anki_hooks = types.ModuleType("anki.hooks")
+    anki_hooks.note_will_be_added = []
+    anki.hooks = anki_hooks
+    sys.modules["anki"] = anki
+    sys.modules["anki.hooks"] = anki_hooks
+
+
+class FakeQTimer:
+    pending: list[tuple[int, object]] = []
+
+    @classmethod
+    def singleShot(cls, delay_ms: int, callback) -> None:
+        cls.pending.append((delay_ms, callback))
+
+
+def flush_qt_timers() -> None:
+    pending = list(FakeQTimer.pending)
+    FakeQTimer.pending.clear()
+    for _delay, callback in pending:
+        callback()
 
 
 if __name__ == "__main__":

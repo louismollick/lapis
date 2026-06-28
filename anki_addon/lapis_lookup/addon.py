@@ -16,10 +16,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
+from anki import hooks as anki_hooks
 from aqt import gui_hooks, mw
 from aqt.browser import Browser
 from aqt.operations import QueryOp
-from aqt.qt import QAction, QMenu, qconnect
+from aqt.qt import QAction, QMenu, QTimer, qconnect
 from aqt.utils import showInfo, showWarning, tooltip
 
 from .generated_lookup_assets import (
@@ -78,8 +79,40 @@ class BackfillState:
     affected_note_ids: set[int] = field(default_factory=set)
 
 
+@dataclass
+class AutoBackfillQueueState:
+    pending_note_ids: list[int] = field(default_factory=list)
+    running: bool = False
+
+
+AUTO_BACKFILL_QUEUE = AutoBackfillQueueState()
+PENDING_ADDED_NOTES: list[tuple[Any, int]] = []
+
+
 def init() -> None:
-    gui_hooks.browser_menus_did_init.append(add_browser_menu)
+    append_hook_once(gui_hooks.browser_menus_did_init, add_browser_menu)
+    add_cards_did_add_note = getattr(gui_hooks, "add_cards_did_add_note", None)
+    if add_cards_did_add_note is not None:
+        append_hook_once(add_cards_did_add_note, on_add_cards_did_add_note)
+    note_will_be_added = getattr(anki_hooks, "note_will_be_added", None)
+    if note_will_be_added is not None:
+        append_hook_once(note_will_be_added, on_note_will_be_added)
+
+
+def append_hook_once(hook: Any, callback: Any) -> None:
+    callbacks = getattr(hook, "_hooks", hook)
+    try:
+        already_registered = callback in callbacks
+    except TypeError:
+        already_registered = False
+    if not already_registered:
+        hook.append(callback)
+
+
+def reset_auto_backfill_queue() -> None:
+    AUTO_BACKFILL_QUEUE.pending_note_ids.clear()
+    AUTO_BACKFILL_QUEUE.running = False
+    PENDING_ADDED_NOTES.clear()
 
 
 def add_browser_menu(browser: Browser) -> None:
@@ -109,17 +142,16 @@ def setup_and_backfill_selected_notes(browser: Browser) -> None:
         showWarning("Select at least one note in Browse first.", parent=browser)
         return
 
-    config = load_config()
     lookup_items = build_lookup_items(note_ids, mw.col)
-
-    QueryOp(
+    start_lookup_job(
         parent=browser,
-        op=lambda _col: run_lookup_only(lookup_items, config),
+        lookup_items=lookup_items,
         success=lambda results: on_backfill_success(
             browser,
             apply_backfill_results(mw.col, results),
         ),
-    ).with_progress("Preparing Lapis lookup...").run_in_background()
+        progress_label="Preparing Lapis lookup...",
+    )
 
 
 def diagnose_selected_notes(browser: Browser) -> None:
@@ -191,6 +223,157 @@ def on_backfill_success(browser: Browser, summary: BackfillSummary) -> None:
     tooltip(message, parent=browser)
     if summary.warnings:
         showInfo("\n".join(summary.warnings[:50]), parent=browser)
+
+
+def on_add_cards_did_add_note(note: Any) -> None:
+    col = getattr(mw, "col", None)
+    note_id = int(getattr(note, "id", 0) or 0)
+    if col is None or note_id <= 0:
+        return
+
+    enqueue_auto_backfill_note_id(col, note_id)
+
+
+def on_note_will_be_added(col: Any, note: Any, _deck_id: Any) -> None:
+    if not is_auto_backfill_note_eligible(note):
+        return
+    PENDING_ADDED_NOTES.append((note, 5))
+    schedule_pending_added_note_drain()
+
+
+def schedule_pending_added_note_drain(delay_ms: int = 0) -> None:
+    try:
+        QTimer.singleShot(delay_ms, drain_pending_added_notes)
+    except Exception:
+        drain_pending_added_notes()
+
+
+def drain_pending_added_notes() -> None:
+    if not PENDING_ADDED_NOTES:
+        return
+
+    remaining: list[tuple[Any, int]] = []
+    col = getattr(mw, "col", None)
+    for note, attempts_left in PENDING_ADDED_NOTES:
+        note_id = int(getattr(note, "id", 0) or 0)
+        if col is not None and note_id > 0:
+            enqueue_auto_backfill_note_id(col, note_id)
+            continue
+        if attempts_left > 1:
+            remaining.append((note, attempts_left - 1))
+
+    PENDING_ADDED_NOTES[:] = remaining
+    if PENDING_ADDED_NOTES:
+        schedule_pending_added_note_drain(50)
+
+
+def enqueue_auto_backfill_note_id(col: Any, note_id: int) -> None:
+    if not is_auto_backfill_note_id_eligible(col, note_id):
+        return
+    if note_id not in AUTO_BACKFILL_QUEUE.pending_note_ids:
+        AUTO_BACKFILL_QUEUE.pending_note_ids.append(note_id)
+    start_auto_backfill_if_idle(col)
+
+
+def is_auto_backfill_note_id_eligible(col: Any, note_id: int) -> bool:
+    try:
+        note = col.get_note(note_id)
+    except Exception:
+        return False
+    return is_auto_backfill_note_eligible(note)
+
+
+def is_auto_backfill_note_eligible(note: Any) -> bool:
+    model = note.note_type()
+    if not is_lapis_model(model):
+        return False
+    if not note_expression(note).strip():
+        return False
+    return not note_lookup_payload_text(note).strip()
+
+
+def start_auto_backfill_if_idle(col: Any | None = None) -> None:
+    if AUTO_BACKFILL_QUEUE.running:
+        return
+
+    col = col or getattr(mw, "col", None)
+    if col is None:
+        return
+
+    note_ids = collect_pending_auto_backfill_note_ids(col)
+    if not note_ids:
+        return
+
+    lookup_items = build_lookup_items(note_ids, col)
+    if not lookup_items:
+        start_auto_backfill_next_batch()
+        return
+
+    AUTO_BACKFILL_QUEUE.running = True
+    try:
+        start_lookup_job(
+            parent=mw,
+            lookup_items=lookup_items,
+            success=on_auto_backfill_lookup_success,
+            failure=on_auto_backfill_lookup_failure,
+            progress_label="Preparing Lapis lookup...",
+        )
+    except Exception:
+        AUTO_BACKFILL_QUEUE.pending_note_ids = note_ids + AUTO_BACKFILL_QUEUE.pending_note_ids
+        AUTO_BACKFILL_QUEUE.running = False
+        raise
+
+
+def collect_pending_auto_backfill_note_ids(col: Any) -> list[int]:
+    note_ids: list[int] = []
+    for note_id in AUTO_BACKFILL_QUEUE.pending_note_ids:
+        if is_auto_backfill_note_id_eligible(col, note_id):
+            note_ids.append(note_id)
+    AUTO_BACKFILL_QUEUE.pending_note_ids.clear()
+    return note_ids
+
+
+def on_auto_backfill_lookup_success(results: dict[str, Any]) -> None:
+    try:
+        summary = apply_backfill_results(mw.col, results)
+    except Exception as error:
+        showWarning(f"Lapis lookup auto-backfill failed.\n{error}", parent=mw)
+    else:
+        if summary.failed or summary.invariant_violations:
+            showWarning(format_backfill_failure_report(summary), parent=mw)
+    finally:
+        start_auto_backfill_next_batch()
+
+
+def on_auto_backfill_lookup_failure(error: Exception) -> None:
+    showWarning(f"Lapis lookup auto-backfill failed.\n{error}", parent=mw)
+    start_auto_backfill_next_batch()
+
+
+def start_auto_backfill_next_batch() -> None:
+    AUTO_BACKFILL_QUEUE.running = False
+    start_auto_backfill_if_idle()
+
+
+def start_lookup_job(
+    *,
+    parent: Any,
+    lookup_items: Sequence[dict[str, Any]],
+    success: Any,
+    progress_label: str,
+    failure: Any | None = None,
+) -> None:
+    if not lookup_items:
+        return
+    config = load_config()
+    op = QueryOp(
+        parent=parent,
+        op=lambda _col: run_lookup_only(lookup_items, config),
+        success=success,
+    )
+    if failure is not None:
+        op = op.failure(failure)
+    op.with_progress(progress_label).run_in_background()
 
 
 def apply_backfill_item(col: Any, item: dict[str, Any], state: BackfillState) -> BackfillSummary:
