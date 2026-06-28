@@ -8,6 +8,7 @@ from typing import Any, Mapping, Sequence
 LOOKUP_FIELD_NAME = "KanjiLookupData"
 CANONICAL_LAPIS_MODEL_NAME = "Lapis+Lookup"
 LOOKUP_TEMPLATE_MARKER = "lapis-lookup-v1"
+LOOKUP_PAYLOAD_PLACEHOLDER = "{{text:KanjiLookupData}}"
 LEGACY_CONVERT_MODE = "convertLegacy"
 LOOKUP_ONLY_MODE = "lookupOnly"
 CORE_LAPIS_FIELDS = {
@@ -42,6 +43,12 @@ def is_lookup_enabled_model(model: Mapping[str, Any]) -> bool:
     if LOOKUP_FIELD_NAME not in field_names:
         return False
     return any(LOOKUP_TEMPLATE_MARKER in template["afmt"] for template in model["tmpls"])
+
+
+def is_lookup_ready_model(model: Mapping[str, Any]) -> bool:
+    if not is_lookup_enabled_model(model):
+        return False
+    return any(LOOKUP_PAYLOAD_PLACEHOLDER in template["afmt"] for template in model["tmpls"])
 
 
 def build_lookup_field_map(old_model: Mapping[str, Any], new_model: Mapping[str, Any]) -> dict[int, int]:

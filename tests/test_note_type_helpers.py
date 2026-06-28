@@ -72,6 +72,36 @@ class NoteTypeHelpersTest(unittest.TestCase):
             {0: 0, 1: 2},
         )
 
+    def test_lookup_ready_requires_payload_placeholder(self) -> None:
+        broken_model = {
+            "flds": [
+                {"name": "Expression"},
+                {"name": "KanjiLookupData"},
+            ],
+            "tmpls": [
+                {
+                    "name": "Mining",
+                    "afmt": '<!-- lapis-lookup-v1 --><script id="lapis-lookup-data" type="application/json"></script>',
+                }
+            ],
+        }
+        ready_model = {
+            "flds": [
+                {"name": "Expression"},
+                {"name": "KanjiLookupData"},
+            ],
+            "tmpls": [
+                {
+                    "name": "Mining",
+                    "afmt": '<!-- lapis-lookup-v1 --><script id="lapis-lookup-data" type="application/json">{{text:KanjiLookupData}}</script>',
+                }
+            ],
+        }
+
+        self.assertTrue(note_type_helpers.is_lookup_enabled_model(broken_model))
+        self.assertFalse(note_type_helpers.is_lookup_ready_model(broken_model))
+        self.assertTrue(note_type_helpers.is_lookup_ready_model(ready_model))
+
 
 if __name__ == "__main__":
     unittest.main()
