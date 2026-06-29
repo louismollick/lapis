@@ -89,11 +89,6 @@ export interface YomitanCoreLike {
             enabledDictionaryMap: Map<string, unknown>;
         },
     ): Promise<BuildAnkiNoteResult>;
-    buildAnkiFieldsFromDictionaryEntry(
-        input: AnkiFieldRenderInput & {
-            dictionaryEntry: TermDictionaryEntry;
-        },
-    ): Promise<BuildAnkiFieldsResult>;
     findTerms(
         text: string,
         config: {

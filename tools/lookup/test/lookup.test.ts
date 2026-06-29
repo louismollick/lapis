@@ -157,22 +157,19 @@ describe("related word definition rendering", () => {
             createDictionarySummary("Jitendex.org [2026-06-06]"),
         ];
         const input = buildRelatedWordDefinitionInput(
-            createTermEntry(),
             "超える",
-            "Jitendex.org [2026-06-06]",
             dictionaryInfo,
+            buildTermDictionaryMap(dictionaryInfo),
             buildDictionaryStylesMap(dictionaryInfo),
         );
 
         assert.equal(input.resultOutputMode, "group");
-        assert.equal(
-            input.cardFormat.fields.Definition.value,
-            "{single-glossary-jitendexorg-2026-06-06}",
-        );
+        assert.equal(input.cardFormat.fields.Definition.value, "{glossary}");
         assert.equal(
             input.dictionaryStylesMap?.get("Jitendex.org [2026-06-06]"),
             ".term-glossary-list { color: red; }",
         );
+        assert.equal(input.term, "超える");
     });
 
     it("returns Yomitan-generated grouped glossary HTML for related words", async () => {
@@ -180,7 +177,8 @@ describe("related word definition rendering", () => {
             createDictionarySummary("Jitendex.org [2026-06-06]"),
         ];
         const fakeCore = {
-            buildAnkiFieldsFromDictionaryEntry: async () => ({
+            buildAnkiNoteFromTerm: async () => ({
+                status: "ok",
                 fields: {
                     Definition:
                         '<div class="yomitan-glossary"><ol><li data-dictionary="Jitendex.org [2026-06-06]"><span class="structured-content">to exceed</span><style>.yomitan-glossary [data-dictionary="Jitendex.org [2026-06-06]"] .term-glossary-list { color: red; }</style></li></ol></div>',
@@ -190,11 +188,10 @@ describe("related word definition rendering", () => {
         } as unknown as YomitanCoreLike;
 
         const html = await renderRelatedWordEntryHtml(
-            createTermEntry(),
             "超える",
             fakeCore,
             dictionaryInfo,
-            ["Jitendex"],
+            buildTermDictionaryMap(dictionaryInfo),
             buildDictionaryStylesMap(dictionaryInfo),
         );
 
@@ -242,16 +239,22 @@ describe("related word definition rendering", () => {
             /title\.innerHTML = renderLookupRubyHtml\(relatedWord\.term, relatedWord\.reading\);/,
         );
         assert.doesNotMatch(backTemplate, /lapis-lookup-word-reading/);
-        assert.doesNotMatch(backTemplate, /subtitleParts\.push\(relatedWord\.reading\)/);
+        assert.doesNotMatch(
+            backTemplate,
+            /subtitleParts\.push\(relatedWord\.reading\)/,
+        );
         assert.match(backTemplate, /id="lapis-lookup-kanji-components"/);
         assert.match(
             css,
-            /\.lapis-lookup-word-term \{\n  font-family: var\(--font-serif\);\n  font-size: calc\(var\(--back-vocab-font-size\) \* 0\.8\);/,
+            /\.lapis-lookup-word-term \{\n {2}font-family: var\(--font-serif\);\n {2}font-size: calc\(var\(--back-vocab-font-size\) \* 0\.8\);/,
         );
-        assert.match(css, /\.lapis-lookup-word-term rt,\n\.lapis-lookup-sheet-title rt \{/);
         assert.match(
             css,
-            /\.lapis-lookup-word-term rt,\n\.lapis-lookup-sheet-title rt \{\n  color: var\(--fg-color\);\n  font-family: var\(--font-serif\);/,
+            /\.lapis-lookup-word-term rt,\n\.lapis-lookup-sheet-title rt \{/,
+        );
+        assert.match(
+            css,
+            /\.lapis-lookup-word-term rt,\n\.lapis-lookup-sheet-title rt \{\n {2}color: var\(--fg-color\);\n {2}font-family: var\(--font-serif\);/,
         );
         assert.doesNotMatch(
             css,

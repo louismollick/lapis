@@ -7,7 +7,6 @@ import {
 import {
     buildDictionaryStylesMap,
     buildKanjiDictionaryMap,
-    buildSingleGlossaryMarker,
     buildTermDictionaryMap,
     ensureDictionaryArchivesPresent,
     importSuggestedDictionaries,
@@ -429,11 +428,10 @@ async function resolveRelatedWord(
                 reading: termEntry.headwords[0]?.reading ?? "",
                 frequency,
                 entryHtml: await renderRelatedWordEntryHtml(
-                    termEntry,
                     word,
                     runtime.core,
                     runtime.dictionaryInfo,
-                    options.definitionDictionaryNames,
+                    runtime.termDictionaryMap,
                     runtime.dictionaryStylesMap,
                     warnings,
                 ),
@@ -533,32 +531,26 @@ async function lookupBestKanjiEntry(
 }
 
 export async function renderRelatedWordEntryHtml(
-    termEntry: TermDictionaryEntry,
     word: string,
     core: YomitanCoreLike,
     dictionaryInfo: DictionarySummary[],
-    preferredDefinitionNames: string[],
+    termDictionaryMap: ReturnType<typeof buildTermDictionaryMap>,
     dictionaryStylesMap: Map<string, string>,
     warnings: string[] = [],
 ): Promise<string> {
-    const selectedTitle = selectPreferredTermDictionaryTitle(
-        termEntry,
-        preferredDefinitionNames,
-    );
-    if (!selectedTitle) {
-        return '<div class="lapis-lookup-empty">No dictionary definition available.</div>';
-    }
-
-    const result = await core.buildAnkiFieldsFromDictionaryEntry(
+    const result = await core.buildAnkiNoteFromTerm(
         buildRelatedWordDefinitionInput(
-            termEntry,
             word,
-            selectedTitle,
             dictionaryInfo,
+            termDictionaryMap,
             dictionaryStylesMap,
         ),
     );
     warnings.push(...result.errors);
+
+    if (result.status !== "ok") {
+        return '<div class="lapis-lookup-empty">No dictionary definition available.</div>';
+    }
 
     return (
         result.fields.Definition ??
@@ -567,14 +559,14 @@ export async function renderRelatedWordEntryHtml(
 }
 
 export function buildRelatedWordDefinitionInput(
-    termEntry: TermDictionaryEntry,
     word: string,
-    selectedDictionaryTitle: string,
     dictionaryInfo: DictionarySummary[],
+    termDictionaryMap: ReturnType<typeof buildTermDictionaryMap>,
     dictionaryStylesMap: Map<string, string>,
-): AnkiFieldRenderInput & { dictionaryEntry: TermDictionaryEntry } {
+): Parameters<YomitanCoreLike["buildAnkiNoteFromTerm"]>[0] {
     return {
-        dictionaryEntry: termEntry,
+        term: word,
+        enabledDictionaryMap: termDictionaryMap,
         dictionaries: buildEnabledDictionaries(dictionaryInfo),
         dictionaryInfo,
         resultOutputMode: "group",
@@ -584,7 +576,7 @@ export function buildRelatedWordDefinitionInput(
             model: "Lapis+Lookup",
             fields: {
                 Definition: {
-                    value: buildSingleGlossaryMarker(selectedDictionaryTitle),
+                    value: "{glossary}",
                 },
             },
         },
@@ -594,27 +586,12 @@ export function buildRelatedWordDefinitionInput(
             fullQuery: word,
             documentTitle: "",
         },
+        options: {
+            matchType: "exact",
+            deinflect: true,
+            removeNonJapaneseCharacters: false,
+        },
     };
-}
-
-function selectPreferredTermDictionaryTitle(
-    termEntry: TermDictionaryEntry,
-    preferredDefinitionNames: string[],
-): string | null {
-    const availableTitles = [
-        ...new Set(
-            termEntry.definitions
-                .map(
-                    (definition) =>
-                        definition.dictionaryAlias || definition.dictionary,
-                )
-                .filter(Boolean),
-        ),
-    ];
-    return selectPreferredDictionaryTitle(
-        availableTitles,
-        preferredDefinitionNames,
-    );
 }
 
 function buildEnabledDictionaries(

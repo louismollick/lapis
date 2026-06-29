@@ -169,10 +169,6 @@ export function selectPreferredFrequency(
     };
 }
 
-export function buildSingleGlossaryMarker(dictionaryTitle: string): string {
-    return `{single-glossary-${toKebabCase(dictionaryTitle)}}`;
-}
-
 export function normalizeDictionaryTitle(value: string): string {
     const lowered = value.toLowerCase();
     if (lowered.includes("jitendex")) {
@@ -210,15 +206,6 @@ export async function readArchiveText(
 
 function normalizeFragment(value: string): string {
     return value.trim().toLowerCase();
-}
-
-function toKebabCase(value: string): string {
-    return value
-        .replace(/[\s_\u3000]/g, "-")
-        .replace(/[^\p{L}\p{N}-]/gu, "")
-        .replace(/--+/g, "-")
-        .replace(/^-|-$/g, "")
-        .toLowerCase();
 }
 
 function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
