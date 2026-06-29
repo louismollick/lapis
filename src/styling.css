@@ -1295,11 +1295,27 @@ html.mobile .sentence, html:not(.mobile) .sentence-alt,
 
 .lapis-lookup-word-term {
   font-family: var(--font-serif);
-  font-size: 1.2em;
+  font-size: calc(var(--back-vocab-font-size) * 0.8);
+  line-height: 1.05;
   overflow-wrap: anywhere;
 }
 
-.lapis-lookup-word-reading,
+.lapis-lookup-word-term ruby,
+.lapis-lookup-sheet-title ruby {
+  ruby-position: over;
+}
+
+.lapis-lookup-word-term rt,
+.lapis-lookup-sheet-title rt {
+  color: var(--fg-color);
+  font-family: var(--font-serif);
+  font-size: 0.38em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
 .lapis-lookup-word-frequency-source {
   color: var(--fg-subtle);
   font-family: var(--font-sans);

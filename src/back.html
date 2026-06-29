@@ -714,6 +714,115 @@
         };
     }
 
+    function isLookupKana(character) {
+        return /[ぁ-ゖァ-ヺーゝゞヽヾ]/.test(character);
+    }
+
+    function normalizeLookupKana(text) {
+        return Array.from(String(text || "")).map(character => {
+            const codePoint = character.codePointAt(0);
+            if (codePoint >= 0x30A1 && codePoint <= 0x30F6) {
+                return String.fromCodePoint(codePoint - 0x60);
+            }
+            return character;
+        }).join("");
+    }
+
+    function wrapLookupRuby(baseText, readingText) {
+        return `<ruby class="lapis-lookup-ruby">${escapeLookupHtml(baseText)}<rt>${escapeLookupHtml(readingText)}</rt></ruby>`;
+    }
+
+    function renderLookupRubyHtml(term, reading) {
+        const baseTerm = String(term || "");
+        const baseReading = String(reading || "");
+        if (!baseReading) return escapeLookupHtml(baseTerm);
+
+        const termChars = Array.from(baseTerm);
+        const readingChars = Array.from(baseReading);
+        const normalizedTerm = normalizeLookupKana(baseTerm);
+        const normalizedReading = normalizeLookupKana(baseReading);
+        if (!termChars.some(character => isLookupKanji(character))) {
+            return wrapLookupRuby(baseTerm, baseReading);
+        }
+        if (normalizedTerm === normalizedReading) {
+            return wrapLookupRuby(baseTerm, baseReading);
+        }
+
+        const normalizedReadingChars = Array.from(normalizedReading);
+        const pieces = [];
+        let termIndex = 0;
+        let readingIndex = 0;
+
+        while (termIndex < termChars.length) {
+            if (isLookupKana(termChars[termIndex])) {
+                const start = termIndex;
+                while (termIndex < termChars.length && isLookupKana(termChars[termIndex])) {
+                    termIndex += 1;
+                }
+                const literal = termChars.slice(start, termIndex).join("");
+                const normalizedLiteral = normalizeLookupKana(literal);
+                const readingSlice = normalizedReadingChars
+                    .slice(readingIndex, readingIndex + normalizedLiteral.length)
+                    .join("");
+                if (readingSlice !== normalizedLiteral) {
+                    return wrapLookupRuby(baseTerm, baseReading);
+                }
+                pieces.push(escapeLookupHtml(literal));
+                readingIndex += normalizedLiteral.length;
+                continue;
+            }
+
+            const start = termIndex;
+            while (termIndex < termChars.length && !isLookupKana(termChars[termIndex])) {
+                termIndex += 1;
+            }
+            const literal = termChars.slice(start, termIndex).join("");
+
+            let nextKanaLiteral = "";
+            let scanIndex = termIndex;
+            while (scanIndex < termChars.length && isLookupKana(termChars[scanIndex])) {
+                nextKanaLiteral += termChars[scanIndex];
+                scanIndex += 1;
+            }
+
+            let nextReadingIndex = normalizedReadingChars.length;
+            if (nextKanaLiteral) {
+                const normalizedNextKana = normalizeLookupKana(nextKanaLiteral);
+                let matchIndex = -1;
+                for (
+                    let index = readingIndex + 1;
+                    index <= normalizedReadingChars.length - normalizedNextKana.length;
+                    index += 1
+                ) {
+                    const candidate = normalizedReadingChars
+                        .slice(index, index + normalizedNextKana.length)
+                        .join("");
+                    if (candidate === normalizedNextKana) {
+                        matchIndex = index;
+                        break;
+                    }
+                }
+                if (matchIndex === -1) {
+                    return wrapLookupRuby(baseTerm, baseReading);
+                }
+                nextReadingIndex = matchIndex;
+            }
+
+            const readingText = readingChars.slice(readingIndex, nextReadingIndex).join("");
+            if (!readingText) {
+                return wrapLookupRuby(baseTerm, baseReading);
+            }
+            pieces.push(wrapLookupRuby(literal, readingText));
+            readingIndex = nextReadingIndex;
+        }
+
+        if (readingIndex !== readingChars.length) {
+            return wrapLookupRuby(baseTerm, baseReading);
+        }
+
+        return pieces.join("");
+    }
+
     async function resolveRelatedWords(store, kanjiItem) {
         if (Array.isArray(kanjiItem.relatedWords)) {
             return kanjiItem.relatedWords.map(relatedWord => ({
@@ -939,8 +1048,7 @@
             const left = document.createElement("div");
             left.className = "lapis-lookup-word-main";
             left.innerHTML = `
-                <span class="lapis-lookup-word-term">${escapeLookupHtml(relatedWord.term)}</span>
-                ${relatedWord.reading ? `<span class="lapis-lookup-word-reading">${escapeLookupHtml(relatedWord.reading)}</span>` : ""}
+                <span class="lapis-lookup-word-term">${renderLookupRubyHtml(relatedWord.term, relatedWord.reading)}</span>
             `;
 
             const right = document.createElement("div");
@@ -974,9 +1082,8 @@
         const body = document.getElementById("lapis-lookup-word-body");
         if (!title || !subtitle || !body) return;
 
-        title.textContent = relatedWord.term;
+        title.innerHTML = renderLookupRubyHtml(relatedWord.term, relatedWord.reading);
         const subtitleParts = [];
-        if (relatedWord.reading) subtitleParts.push(relatedWord.reading);
         if (relatedWord.frequency?.value !== null && relatedWord.frequency?.value !== undefined) {
             subtitleParts.push(`${relatedWord.frequency.source || "Frequency"}: ${relatedWord.frequency.value}`);
         }

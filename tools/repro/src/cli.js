@@ -120,6 +120,15 @@ async function runReplay(bundleDir, note, requestedKanji) {
     const wordRows = page.locator(".lapis-lookup-word-row");
     report.checks.relatedWordRows = await wordRows.count();
     if (report.checks.relatedWordRows > 0) {
+      report.checks.firstWordRowTermHtml = await page
+        .locator(".lapis-lookup-word-row .lapis-lookup-word-term")
+        .first()
+        .innerHTML();
+      report.checks.firstWordRowFrequencySource = await page
+        .locator(".lapis-lookup-word-row .lapis-lookup-word-frequency-source")
+        .first()
+        .textContent()
+        .catch(() => null);
       await wordRows.first().click();
       await page.waitForFunction(() => {
         const view = document.querySelector("#word-popover-view");
@@ -132,6 +141,8 @@ async function runReplay(bundleDir, note, requestedKanji) {
       if (!report.checks.wordPopoverOpen) {
         return fail(report, "Word popover did not open after related-word click.");
       }
+      report.checks.wordTitleHtml = await page.locator("#lapis-lookup-word-title").innerHTML();
+      report.checks.wordSubtitleText = await page.locator("#lapis-lookup-word-subtitle").textContent();
     } else {
       report.checks.wordPopoverOpen = "not-applicable";
     }

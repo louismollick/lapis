@@ -24,6 +24,31 @@ describe("lookup click replay", () => {
     assert.equal(report.checks.wordPopoverOpen, true);
   });
 
+  it("renders mixed-script related words with ruby in list and detail views", () => {
+    const bundleDir = createBundle({
+      manifest: true,
+      shard: true,
+      expression: "隠す",
+      expressionReading: "かくす",
+      kanji: "隠",
+      relatedWord: {
+        term: "隠す",
+        reading: "かくす",
+        frequency: { value: 574, source: "JPDBv2" },
+        entryHtml: "<div>to hide</div>",
+      },
+    });
+
+    const result = runReplay(bundleDir, "隠");
+
+    assert.equal(result.status, 0, result.stderr);
+    const report = readReport(bundleDir);
+    assert.match(report.checks.firstWordRowTermHtml, /<ruby[^>]*>隠<rt>かく<\/rt><\/ruby>す/);
+    assert.match(report.checks.wordTitleHtml, /<ruby[^>]*>隠<rt>かく<\/rt><\/ruby>す/);
+    assert.equal(report.checks.firstWordRowFrequencySource, "JPDBv2");
+    assert.equal(report.checks.wordSubtitleText, "JPDBv2: 574");
+  });
+
   it("reports missing manifest clearly", () => {
     const bundleDir = createBundle({ manifest: false, shard: false });
 
@@ -46,8 +71,8 @@ describe("lookup click replay", () => {
   });
 });
 
-function runReplay(bundleDir) {
-  return spawnSync(process.execPath, [cliPath, "--bundle", bundleDir, "--kanji", "粒"], {
+function runReplay(bundleDir, kanji = "粒") {
+  return spawnSync(process.execPath, [cliPath, "--bundle", bundleDir, "--kanji", kanji], {
     cwd: path.join(repoRoot, "tools/repro"),
     encoding: "utf8",
   });
@@ -57,18 +82,30 @@ function readReport(bundleDir) {
   return JSON.parse(fs.readFileSync(path.join(bundleDir, "repro-report.json"), "utf8"));
 }
 
-function createBundle({ manifest, shard }) {
+function createBundle({
+  manifest,
+  shard,
+  expression = "粒子",
+  expressionReading = "りゅうし",
+  kanji = "粒",
+  relatedWord = {
+    term: "粒子",
+    reading: "りゅうし",
+    frequency: { value: 100, source: "JPDB" },
+    entryHtml: "<div>particle</div>",
+  },
+}) {
   const bundleDir = fs.mkdtempSync(path.join(os.tmpdir(), "lapis-repro-"));
   fs.mkdirSync(path.join(bundleDir, "notes"));
   const payload = {
     version: 2,
-    expression: "粒子",
-    kanji: [{ char: "粒", wordRefs: ["粒子"], components: ["米"] }],
+    expression,
+    kanji: [{ char: kanji, wordRefs: [relatedWord.term], components: ["米"] }],
   };
   const html = renderBackHtml({
-    Expression: "粒子",
+    Expression: expression,
     ExpressionFurigana: "",
-    ExpressionReading: "りゅうし",
+    ExpressionReading: expressionReading,
     KanjiLookupData: JSON.stringify(payload),
   });
   fs.writeFileSync(path.join(bundleDir, "notes/note_1.html"), html);
@@ -80,7 +117,7 @@ function createBundle({ manifest, shard }) {
         {
           id: 1,
           replayHtml: "notes/note_1.html",
-          expression: "粒子",
+          expression,
           kanjiLookupData: JSON.stringify(payload),
         },
       ],
@@ -101,7 +138,7 @@ function createBundle({ manifest, shard }) {
     );
   }
   if (shard) {
-    const shardIndex = lookupTermShard("粒子");
+    const shardIndex = lookupTermShard(relatedWord.term);
     fs.writeFileSync(
       path.join(bundleDir, `_lapis_lookup_store_${String(shardIndex).padStart(2, "0")}.js`),
       `window.__lapisLookupInstallStore(${JSON.stringify({
@@ -112,12 +149,7 @@ function createBundle({ manifest, shard }) {
         payload: compressLookupPayload({
           version: 2,
           terms: {
-            "粒子": {
-              term: "粒子",
-              reading: "りゅうし",
-              frequency: { value: 100, source: "JPDB" },
-              entryHtml: "<div>particle</div>",
-            },
+            [relatedWord.term]: relatedWord,
           },
         }),
       })});\n`,

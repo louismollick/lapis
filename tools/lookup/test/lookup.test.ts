@@ -232,7 +232,27 @@ describe("related word definition rendering", () => {
         assert.match(backTemplate, /Array\.isArray\(kanjiItem\.relatedWords\)/);
         assert.match(backTemplate, /kanjiItem\.wordRefs/);
         assert.match(backTemplate, /function createKanjiComponentCluster/);
+        assert.match(backTemplate, /function renderLookupRubyHtml/);
+        assert.match(
+            backTemplate,
+            /<span class="lapis-lookup-word-term">\$\{renderLookupRubyHtml\(relatedWord\.term, relatedWord\.reading\)\}<\/span>/,
+        );
+        assert.match(
+            backTemplate,
+            /title\.innerHTML = renderLookupRubyHtml\(relatedWord\.term, relatedWord\.reading\);/,
+        );
+        assert.doesNotMatch(backTemplate, /lapis-lookup-word-reading/);
+        assert.doesNotMatch(backTemplate, /subtitleParts\.push\(relatedWord\.reading\)/);
         assert.match(backTemplate, /id="lapis-lookup-kanji-components"/);
+        assert.match(
+            css,
+            /\.lapis-lookup-word-term \{\n  font-family: var\(--font-serif\);\n  font-size: calc\(var\(--back-vocab-font-size\) \* 0\.8\);/,
+        );
+        assert.match(css, /\.lapis-lookup-word-term rt,\n\.lapis-lookup-sheet-title rt \{/);
+        assert.match(
+            css,
+            /\.lapis-lookup-word-term rt,\n\.lapis-lookup-sheet-title rt \{\n  color: var\(--fg-color\);\n  font-family: var\(--font-serif\);/,
+        );
         assert.doesNotMatch(
             css,
             /\.lapis-lookup-word-detail \.yomitan-glossary ul/,
