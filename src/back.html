@@ -492,7 +492,8 @@
         const modal = document.getElementById("modal");
         let images = Array.from(document.querySelectorAll(".image img, .image-alt img, .def-image img"));
         /* Disable image links that were opening in a browser window */
-        const glossImageLinks = document.querySelectorAll(".definition a:has(img)");
+        const glossImageLinks = Array.from(document.querySelectorAll(".definition a"))
+            .filter(link => link.querySelector("img"));
         glossImageLinks.forEach(link => link.href = "");
 
         // Add listeners to images
@@ -569,7 +570,9 @@
     // Fixes list numbering when using multiple primary dicts
     function movePrimaryDicts() {
         let primaryDicts = document.querySelectorAll("#primary li[data-dictionary]");
-        let firstList = document.querySelector("#primary .yomitan-glossary > ol:has(li[data-dictionary])");
+        let firstList = Array.from(document.querySelectorAll("#primary .yomitan-glossary > ol"))
+            .find(list => list.querySelector("li[data-dictionary]"));
+        if (!firstList) return;
         for (let idx = 1; idx < primaryDicts.length; idx++) {
             firstList.appendChild(primaryDicts[idx]);
         }
@@ -578,7 +581,7 @@
     // Read user settings and set them as html attributes
     function userSettings() {
         const styles = getComputedStyle(document.documentElement);
-        const miscInfo = document.querySelector("details:has(.misc-info)");
+        const miscInfo = document.querySelector(".misc-info")?.closest("details") || null;
         const lapis = document.getElementById("lapis");
         const options = [
             "--main-picture-position",
@@ -663,15 +666,26 @@
         return `${prefix}${String(shardIndex).padStart(2, "0")}${suffix}`;
     }
 
+    function withLookupTimeout(promise, label, timeoutMs = 3000) {
+        return Promise.race([
+            promise,
+            new Promise((_, reject) => {
+                setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+            }),
+        ]);
+    }
+
     function loadLookupScript(src) {
-        return new Promise((resolve, reject) => {
-            const script = document.createElement("script");
-            script.src = src;
-            script.async = true;
-            script.dataset.lapisLookupShard = src;
-            script.onload = () => resolve();
-            script.onerror = () => reject(new Error(`Lookup store shard unavailable: ${src}`));
-            document.head.appendChild(script);
+        if (typeof fetch !== "function") {
+            return Promise.reject(new Error(`Lookup store fetch is unavailable: ${src}`));
+        }
+
+        return fetch(src, { cache: "no-store" }).then(async response => {
+            if (!response.ok) {
+                throw new Error(`Lookup store shard unavailable: ${src}`);
+            }
+            const source = await response.text();
+            Function(`${source}\n//# sourceURL=${src}`)();
         });
     }
 
@@ -684,13 +698,19 @@
                 throw new Error("Lookup store manifest is unavailable.");
             }
 
-            await loadLookupScript(lookupShardScriptName(shardIndex, manifest));
+            await withLookupTimeout(
+                loadLookupScript(lookupShardScriptName(shardIndex, manifest)),
+                `Lookup store shard ${shardIndex}`,
+            );
             const shardEnvelope = window.__lapisLookupStoreShards?.[shardIndex];
             if (!shardEnvelope || shardEnvelope.encoding !== "zlib+base64-json" || !shardEnvelope.payload) {
                 throw new Error(`Lookup store shard ${shardIndex} did not install.`);
             }
 
-            const shardStore = await inflateBase64Json(shardEnvelope.payload);
+            const shardStore = await withLookupTimeout(
+                inflateBase64Json(shardEnvelope.payload),
+                `Lookup store shard ${shardIndex} inflate`,
+            );
             const terms = shardStore?.terms || {};
             store.shardTerms.set(shardIndex, terms);
             return terms;

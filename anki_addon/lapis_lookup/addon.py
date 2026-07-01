@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import glob
 import base64
-import copy
 import html
 import json
 import os
@@ -11,7 +10,6 @@ import re
 import shutil
 import subprocess
 import threading
-from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -33,11 +31,7 @@ from .generated_lookup_assets import (
     LOOKUP_SCRIPT_BLOCK,
 )
 from .lookup_store import (
-    LOOKUP_STORE_MEDIA_NAME,
-    LOOKUP_STORE_SHARD_PREFIX,
-    LOOKUP_STORE_SHARD_SUFFIX,
     merge_lookup_terms,
-    parse_lookup_store_envelope,
     read_lookup_store_from_media,
     write_lookup_store_to_media,
 )
@@ -130,11 +124,6 @@ def add_browser_menu(browser: Browser) -> None:
     qconnect(diagnose_action.triggered, lambda: diagnose_selected_notes(browser))
     menu.addAction(diagnose_action)
 
-    export_action = QAction("Export Lookup Debug Bundle Selected Notes", browser)
-    export_action.setMenuRole(QAction.MenuRole.NoRole)
-    qconnect(export_action.triggered, lambda: export_lookup_debug_bundle_selected_notes(browser))
-    menu.addAction(export_action)
-
 
 def setup_and_backfill_selected_notes(browser: Browser) -> None:
     note_ids = list(browser.selected_notes())
@@ -182,23 +171,6 @@ def diagnose_selected_notes(browser: Browser) -> None:
         )
 
     showInfo("\n".join(lines).strip(), parent=browser)
-
-
-def export_lookup_debug_bundle_selected_notes(browser: Browser) -> None:
-    note_ids = list(browser.selected_notes())
-    if not note_ids:
-        showWarning("Select at least one note in Browse first.", parent=browser)
-        return
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path.home() / "Desktop" / f"lapis_lookup_debug_bundle_{timestamp}"
-    bundle_path = export_lookup_debug_bundle(
-        mw.col,
-        note_ids,
-        output_dir,
-        config=load_config(),
-    )
-    showInfo(f"Exported Lapis lookup debug bundle:\n{bundle_path}", parent=browser)
 
 
 def run_lookup_only(
@@ -1201,181 +1173,3 @@ def resolve_executable(name: str) -> str | None:
 
 def load_config() -> dict[str, Any]:
     return mw.addonManager.getConfig(ADDON_NAME) or {}
-
-
-def export_lookup_debug_bundle(
-    col: Any,
-    note_ids: Sequence[int],
-    output_dir: Path,
-    *,
-    config: dict[str, Any] | None = None,
-) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    notes_dir = output_dir / "notes"
-    notes_dir.mkdir(exist_ok=True)
-
-    bundle_notes: list[dict[str, Any]] = []
-    models_by_id: dict[int, dict[str, Any]] = {}
-    for note_id in note_ids:
-        note = col.get_note(note_id)
-        model = copy.deepcopy(note.note_type())
-        model_id = int(model["id"])
-        models_by_id[model_id] = model
-        field_names = [field["name"] for field in model["flds"]]
-        fields = note_field_map(note)
-        raw_fields = raw_note_fields_text(col, note_id)
-        replay_html = render_replay_back_html(model, fields)
-        replay_name = f"note_{note_id}.html"
-        (notes_dir / replay_name).write_text(replay_html, encoding="utf-8")
-        bundle_notes.append(
-            {
-                "id": note_id,
-                "mid": getattr(note, "mid", model_id),
-                "modelName": model.get("name", ""),
-                "fieldNames": field_names,
-                "fields": fields,
-                "rawFields": raw_fields,
-                "expression": fields.get("Expression", note_expression(note)),
-                "kanjiLookupData": fields.get(LOOKUP_FIELD_NAME, ""),
-                "replayHtml": f"notes/{replay_name}",
-            }
-        )
-
-    media_manifest = copy_lookup_store_media(col, output_dir)
-    bundle = {
-        "version": 1,
-        "exportedAt": datetime.now().isoformat(timespec="seconds"),
-        "addon": ADDON_NAME,
-        "config": config or {},
-        "notes": bundle_notes,
-        "models": list(models_by_id.values()),
-        "assets": {
-            "frontTemplate": FRONT_TEMPLATE,
-            "backTemplate": BACK_TEMPLATE,
-            "stylingCss": STYLING_CSS,
-            "lookupCssBlock": LOOKUP_CSS_BLOCK,
-            "lookupMarkupBlock": LOOKUP_MARKUP_BLOCK,
-            "lookupScriptBlock": LOOKUP_SCRIPT_BLOCK,
-        },
-        "media": media_manifest,
-    }
-    (output_dir / "bundle.json").write_text(
-        json.dumps(bundle, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return output_dir
-
-
-def note_field_map(note: Any) -> dict[str, str]:
-    model = note.note_type()
-    values: dict[str, str] = {}
-    fields = list(getattr(note, "fields", []))
-    for index, field in enumerate(model["flds"]):
-        name = field["name"]
-        if index < len(fields):
-            values[name] = str(fields[index])
-            continue
-        try:
-            values[name] = str(note[name])
-        except (KeyError, IndexError, TypeError):
-            values[name] = ""
-    return values
-
-
-def raw_note_fields_text(col: Any, note_id: int) -> str | None:
-    db = getattr(col, "db", None)
-    scalar = getattr(db, "scalar", None)
-    if callable(scalar):
-        try:
-            return scalar("select flds from notes where id = ?", note_id)
-        except TypeError:
-            return scalar("select flds from notes where id = ?", int(note_id))
-    note = col.get_note(note_id)
-    fields = getattr(note, "fields", None)
-    if fields is None:
-        return None
-    return "\x1f".join(str(field) for field in fields)
-
-
-def render_replay_back_html(model: dict[str, Any], fields: dict[str, str]) -> str:
-    template = model["tmpls"][0].get("afmt", BACK_TEMPLATE) if model.get("tmpls") else BACK_TEMPLATE
-    body = render_anki_template(template, fields)
-    css = model.get("css", STYLING_CSS)
-    return "\n".join(
-        [
-            "<!doctype html>",
-            '<html lang="ja">',
-            "<head>",
-            '<meta charset="utf-8">',
-            '<meta name="viewport" content="width=device-width, initial-scale=1">',
-            '<base href="../">',
-            f"<style>{css}</style>",
-            "</head>",
-            "<body>",
-            body,
-            "</body>",
-            "</html>",
-        ]
-    )
-
-
-def render_anki_template(template: str, fields: dict[str, str]) -> str:
-    rendered = template
-    for name, value in fields.items():
-        rendered = render_anki_sections(rendered, name, value)
-    rendered = re.sub(r"{{[#^][^}]+}}.*?{{/[^}]+}}", "", rendered, flags=re.S)
-    rendered = re.sub(
-        r"{{(?:text:|furigana:|kana:|kanji:)?([^}]+)}}",
-        lambda match: fields.get(match.group(1).strip(), ""),
-        rendered,
-    )
-    return rendered
-
-
-def render_anki_sections(template: str, field_name: str, value: str) -> str:
-    escaped_name = re.escape(field_name)
-    truthy_pattern = re.compile(r"{{#" + escaped_name + r"}}(.*?){{/" + escaped_name + r"}}", re.S)
-    falsey_pattern = re.compile(r"{{\^" + escaped_name + r"}}(.*?){{/" + escaped_name + r"}}", re.S)
-    template = truthy_pattern.sub(lambda match: match.group(1) if value else "", template)
-    return falsey_pattern.sub(lambda match: "" if value else match.group(1), template)
-
-
-def copy_lookup_store_media(col: Any, output_dir: Path) -> dict[str, Any]:
-    media_dir = collection_media_dir(col)
-    copied: list[str] = []
-    missing: list[str] = []
-    expected = [LOOKUP_STORE_MEDIA_NAME]
-    if media_dir is None:
-        return {"mediaDir": None, "expected": expected, "copied": copied, "missing": expected}
-
-    manifest_path = media_dir / LOOKUP_STORE_MEDIA_NAME
-    if not manifest_path.exists():
-        return {"mediaDir": str(media_dir), "expected": expected, "copied": copied, "missing": expected}
-
-    shutil.copy2(manifest_path, output_dir / LOOKUP_STORE_MEDIA_NAME)
-    copied.append(LOOKUP_STORE_MEDIA_NAME)
-    try:
-        envelope = parse_lookup_store_envelope(manifest_path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        envelope = {}
-    shard_count = int(envelope.get("shardCount", 64))
-    shard_prefix = str(envelope.get("shardPrefix", LOOKUP_STORE_SHARD_PREFIX))
-    shard_suffix = str(envelope.get("shardSuffix", LOOKUP_STORE_SHARD_SUFFIX))
-    for shard_index in range(shard_count):
-        shard_name = f"{shard_prefix}{shard_index:02d}{shard_suffix}"
-        expected.append(shard_name)
-        shard_path = media_dir / shard_name
-        if shard_path.exists():
-            shutil.copy2(shard_path, output_dir / shard_name)
-            copied.append(shard_name)
-        else:
-            missing.append(shard_name)
-    return {"mediaDir": str(media_dir), "expected": expected, "copied": copied, "missing": missing}
-
-
-def collection_media_dir(col: Any) -> Path | None:
-    media = getattr(col, "media", None)
-    media_dir = getattr(media, "dir", None)
-    if not callable(media_dir):
-        return None
-    return Path(media_dir())

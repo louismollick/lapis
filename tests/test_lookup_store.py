@@ -374,51 +374,6 @@ class BackfillApplicationTest(unittest.TestCase):
             ],
         )
 
-    def test_debug_bundle_includes_raw_fields_and_lookup_store_media(self) -> None:
-        addon = load_addon()
-        lookup_store = importlib.import_module("anki_addon.lapis_lookup.lookup_store")
-        with tempfile.TemporaryDirectory() as media_dir, tempfile.TemporaryDirectory() as out_dir:
-            col = FakeCollection(media_dir)
-            lookup_model = addon.create_canonical_lookup_model(col)
-            col.notes[101] = FakeNote(
-                101,
-                lookup_model["id"],
-                col,
-                {
-                    "Expression": "粒子",
-                    addon.LOOKUP_FIELD_NAME: '{"version":2,"expression":"粒子","kanji":[]}',
-                },
-            )
-            lookup_store.write_lookup_store_to_media(
-                col,
-                lookup_store.merge_lookup_terms(
-                    None,
-                    {
-                        "粒子": {
-                            "term": "粒子",
-                            "reading": "りゅうし",
-                            "frequency": {"value": 1, "source": "JPDB"},
-                            "entryHtml": "<div>particle</div>",
-                        }
-                    },
-                ),
-            )
-
-            bundle_path = addon.export_lookup_debug_bundle(
-                col,
-                [101],
-                Path(out_dir) / "bundle",
-                config={"lookup_repo_root": "/tmp/lapis"},
-            )
-
-            bundle = (bundle_path / "bundle.json").read_text(encoding="utf-8")
-            self.assertIn('"rawFields"', bundle)
-            self.assertIn('"kanjiLookupData"', bundle)
-            self.assertTrue((bundle_path / lookup_store.LOOKUP_STORE_MEDIA_NAME).exists())
-            self.assertTrue(any(bundle_path.glob("_lapis_lookup_store_*.js")))
-            self.assertTrue((bundle_path / "notes" / "note_101.html").exists())
-
-
 class AutoBackfillTest(unittest.TestCase):
     def test_collection_hook_drains_after_note_gets_id(self) -> None:
         addon = load_addon()
