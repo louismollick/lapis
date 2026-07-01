@@ -916,8 +916,36 @@
         }
 
         let lastTouchTime = 0;
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let touchMoved = false;
+        const touchMoveThreshold = 10;
+
+        element.addEventListener("touchstart", (event) => {
+            const touch = event.changedTouches?.[0];
+            touchStartX = touch?.clientX ?? 0;
+            touchStartY = touch?.clientY ?? 0;
+            touchMoved = false;
+        }, { passive: true });
+
+        element.addEventListener("touchmove", (event) => {
+            const touch = event.changedTouches?.[0];
+            if (!touch) return;
+            if (
+                Math.abs(touch.clientX - touchStartX) > touchMoveThreshold ||
+                Math.abs(touch.clientY - touchStartY) > touchMoveThreshold
+            ) {
+                touchMoved = true;
+            }
+        }, { passive: true });
+
+        element.addEventListener("touchcancel", () => {
+            touchMoved = true;
+        }, { passive: true });
+
         element.addEventListener("touchend", (event) => {
             lastTouchTime = Date.now();
+            if (touchMoved) return;
             handler(event);
         }, { passive: true });
 
@@ -977,18 +1005,37 @@
         }
     }
 
+    function resetLookupScrollState(activeSheet) {
+        const overlay = document.getElementById("lapis-lookup-overlay");
+        overlay?.scrollTo(0, 0);
+
+        const bodies = document.querySelectorAll(".lapis-lookup-sheet-body");
+        bodies.forEach(body => body.scrollTo(0, 0));
+
+        activeSheet?.scrollTo(0, 0);
+        activeSheet?.querySelector(".lapis-lookup-sheet-body")?.scrollTo(0, 0);
+    }
+
     function showLookupSheet(sheetId) {
         const overlay = document.getElementById("lapis-lookup-overlay");
         const sheets = document.querySelectorAll(".lapis-lookup-sheet");
-        sheets.forEach(sheet => sheet.classList.add("hidden"));
+        let activeSheet = null;
+        sheets.forEach(sheet => {
+            sheet.classList.add("hidden");
+            sheet.setAttribute("aria-hidden", "true");
+        });
 
         if (!overlay || !sheetId) {
+            resetLookupScrollState(null);
             overlay?.classList.add("hidden");
             return;
         }
 
+        activeSheet = document.getElementById(sheetId);
+        resetLookupScrollState(activeSheet);
         overlay.classList.remove("hidden");
-        document.getElementById(sheetId)?.classList.remove("hidden");
+        activeSheet?.classList.remove("hidden");
+        activeSheet?.setAttribute("aria-hidden", "false");
     }
 
     function closeLookupOverlay(store) {

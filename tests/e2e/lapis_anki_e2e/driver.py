@@ -272,16 +272,7 @@ def run_next_preview(context: dict[str, Any]) -> None:
 
     try:
         if preview_index >= len(preview_items):
-            for label, (note_id, _details) in context["note_ids_by_label"].items():
-                note = main_window().col.get_note(note_id)
-                note_report = report["notes"][label]
-                note_report.setdefault("models", {}).setdefault(
-                    "after",
-                    {"id": note.note_type()["id"], "name": note.note_type()["name"]},
-                )
-            report["status"] = "ok"
-            report["phase"] = "done"
-            finish_harness(report_path, report, artifacts_dir, debug)
+            QTimer.singleShot(0, lambda: run_reviewer_validation(context))
             return
 
         label, (note_id, details) = preview_items[preview_index]
@@ -354,6 +345,38 @@ def continue_preview_note(context: dict[str, Any]) -> None:
     QTimer.singleShot(0, lambda: run_next_preview(context))
 
 
+def run_reviewer_validation(context: dict[str, Any]) -> None:
+    report_path: Path = context["report_path"]
+    report: dict[str, Any] = context["report"]
+    artifacts_dir: Path = context["artifacts_dir"]
+    debug: dict[str, Any] = context["debug"]
+
+    try:
+        report["phase"] = "review-open"
+        write_report(report_path, report)
+        review_report = validate_reviewer_overlay(
+            artifacts_dir=artifacts_dir,
+            report=report,
+            report_path=report_path,
+        )
+        report["review"] = review_report
+
+        for label, (note_id, _details) in context["note_ids_by_label"].items():
+            note = main_window().col.get_note(note_id)
+            note_report = report["notes"][label]
+            note_report.setdefault("models", {}).setdefault(
+                "after",
+                {"id": note.note_type()["id"], "name": note.note_type()["name"]},
+            )
+        report["status"] = "ok"
+        report["phase"] = "done"
+        finish_harness(report_path, report, artifacts_dir, debug)
+    except Exception as error:
+        report["errors"].append(str(error))
+        report["traceback"] = traceback.format_exc()
+        finish_harness(report_path, report, artifacts_dir, debug)
+
+
 def finalize_app() -> None:
     window = main_window()
     if window is not None:
@@ -373,6 +396,16 @@ def mark_preview_phase(
 ) -> None:
     note_report.setdefault("previewPhases", []).append(phase)
     report["phase"] = f"preview-{label}:{phase}"
+    write_report(report_path, report)
+
+
+def mark_review_phase(
+    *,
+    report_path: Path,
+    report: dict[str, Any],
+    phase: str,
+) -> None:
+    report["phase"] = f"review:{phase}"
     write_report(report_path, report)
 
 
@@ -818,6 +851,280 @@ def assert_preview(snapshot: dict[str, Any], expression: str) -> dict[str, Any]:
             "expectedFirstRelatedTerm": expected["first_related_term"],
             "actualWordTitleHtml": snapshot["wordTitleHtml"],
             "definitionNonEmpty": bool(snapshot["wordBodyHtml"].strip()),
+        },
+    }
+
+
+def reviewer() -> Any:
+    return getattr(main_window(), "reviewer", None)
+
+
+def wait_for_python_condition(check: Any, label: str, timeout_ms: int = 10000) -> None:
+    loop = QEventLoop()
+    state: dict[str, Any] = {"done": False}
+
+    def finish() -> None:
+        if loop.isRunning():
+            loop.quit()
+
+    timer = QTimer(main_window())
+    timer.setSingleShot(True)
+    timer.timeout.connect(finish)
+    timer.start(timeout_ms)
+
+    def poll() -> None:
+        if state["done"]:
+            return
+        if check():
+            state["done"] = True
+            finish()
+            return
+        QTimer.singleShot(100, poll)
+
+    poll()
+    loop.exec()
+    timer.stop()
+    if not state["done"]:
+        raise TimeoutError(f"Timed out waiting for {label}")
+
+
+def wait_ms(duration_ms: int) -> None:
+    loop = QEventLoop()
+    QTimer.singleShot(duration_ms, loop.quit)
+    loop.exec()
+
+
+def collect_lookup_snapshot(web: Any) -> dict[str, Any]:
+    return eval_js(
+        web,
+        """
+(() => {
+  const overlay = document.querySelector("#lapis-lookup-overlay");
+  const kanjiView = document.querySelector("#kanji-popover-view");
+  const wordView = document.querySelector("#word-popover-view");
+  const kanjiBody = document.querySelector("#lapis-lookup-kanji-body");
+  const wordBody = document.querySelector("#lapis-lookup-word-body");
+  return {
+    targetCount: document.querySelectorAll(".lapis-lookup-kanji-target").length,
+    clickedKanji: document.querySelector("#lapis-lookup-kanji-char")?.textContent?.trim() || "",
+    components: [...document.querySelectorAll(".lapis-lookup-component-chip")].map(node => node.textContent.trim()),
+    relatedRows: document.querySelectorAll(".lapis-lookup-word-row").length,
+    frequencySource: document.querySelector(".lapis-lookup-word-frequency-source")?.textContent?.trim() || "",
+    wordTitleHtml: document.querySelector("#lapis-lookup-word-title")?.innerHTML || "",
+    wordSubtitleText: document.querySelector("#lapis-lookup-word-subtitle")?.textContent?.trim() || "",
+    wordBodyHtml: document.querySelector("#lapis-lookup-word-body")?.innerHTML || "",
+    overlayVisible: !!overlay && !overlay.classList.contains("hidden"),
+    kanjiOverlayVisible: !!kanjiView && !kanjiView.classList.contains("hidden"),
+    wordOverlayVisible: !!wordView && !wordView.classList.contains("hidden"),
+    overlayScrollTop: overlay?.scrollTop ?? 0,
+    kanjiBodyScrollTop: kanjiBody?.scrollTop ?? 0,
+    wordBodyScrollTop: wordBody?.scrollTop ?? 0,
+    consoleErrors: window.__lapisE2E?.consoleErrors || [],
+    windowErrors: window.__lapisE2E?.windowErrors || [],
+    rejections: window.__lapisE2E?.rejections || [],
+  };
+})()
+""",
+    )
+
+
+def simulate_touch_scroll_on_selector(web: Any, selector: str, scroll_selector: str) -> dict[str, Any]:
+    return eval_js(
+        web,
+        f"""
+(() => {{
+  const node = document.querySelector({selector!r});
+  const scroller = document.querySelector({scroll_selector!r});
+  if (!node || !scroller) {{
+    return {{ ok: false, reason: "missing-selector" }};
+  }}
+
+  node.scrollIntoView({{ block: "center", inline: "center" }});
+  const rect = node.getBoundingClientRect();
+  const startX = Math.round(rect.left + rect.width / 2);
+  const startY = Math.round(rect.top + Math.min(rect.height / 2, 20));
+  const endY = startY + 36;
+
+  const makeTouch = (x, y) => ({{
+    identifier: 1,
+    target: node,
+    clientX: x,
+    clientY: y,
+    pageX: x + window.scrollX,
+    pageY: y + window.scrollY,
+    screenX: x,
+    screenY: y,
+  }});
+
+  const dispatchTouch = (type, touch) => {{
+    try {{
+      const touchEvent = new TouchEvent(type, {{
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        changedTouches: [touch],
+        touches: type === "touchend" ? [] : [touch],
+        targetTouches: type === "touchend" ? [] : [touch],
+      }});
+      node.dispatchEvent(touchEvent);
+      return;
+    }} catch (_error) {{
+      const event = new Event(type, {{
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      }});
+      Object.defineProperty(event, "changedTouches", {{ value: [touch] }});
+      Object.defineProperty(event, "touches", {{ value: type === "touchend" ? [] : [touch] }});
+      Object.defineProperty(event, "targetTouches", {{ value: type === "touchend" ? [] : [touch] }});
+      node.dispatchEvent(event);
+    }}
+  }};
+
+  dispatchTouch("touchstart", makeTouch(startX, startY));
+  dispatchTouch("touchmove", makeTouch(startX, endY));
+  scroller.scrollTop += 180;
+  dispatchTouch("touchend", makeTouch(startX, endY));
+
+  return {{
+    ok: true,
+    scrollerScrollTop: scroller.scrollTop,
+    wordOverlayVisible: !!document.querySelector("#word-popover-view") &&
+      !document.querySelector("#word-popover-view").classList.contains("hidden"),
+  }};
+}})()
+""",
+    )
+
+
+def validate_reviewer_overlay(
+    *,
+    artifacts_dir: Path,
+    report: dict[str, Any],
+    report_path: Path,
+) -> dict[str, Any]:
+    deck_id = main_window().col.decks.id(FIXTURE_DECK_NAME)
+    if not deck_id:
+        raise RuntimeError(f"Fixture deck missing: {FIXTURE_DECK_NAME}")
+
+    main_window().col.decks.select(deck_id)
+    main_window().moveToState("review")
+    wait_for_python_condition(
+        lambda: reviewer() is not None and getattr(reviewer(), "web", None) is not None and getattr(reviewer(), "card", None) is not None,
+        "reviewer webview",
+        timeout_ms=30000,
+    )
+
+    review = reviewer()
+    web = review.web
+    note = main_window().col.get_note(review.card.nid)
+    expression = note["Expression"]
+
+    mark_review_phase(report_path=report_path, report=report, phase="show-answer")
+    if getattr(review, "state", None) != "answer":
+        review._showAnswer()
+
+    wait_for_condition(
+        web,
+        f"""
+(() => {{
+  const dataText = document.getElementById("lapis-lookup-data")?.textContent || "";
+  let data = null;
+  try {{
+    data = JSON.parse(dataText);
+  }} catch (_error) {{
+    return false;
+  }}
+  return data?.expression === {expression!r} &&
+    document.querySelectorAll(".lapis-lookup-kanji-target").length > 0;
+}})()
+""",
+        "reviewer answer-side lookup targets",
+        timeout_ms=30000,
+    )
+    install_probe(web)
+
+    mark_review_phase(report_path=report_path, report=report, phase="open-kanji-overlay")
+    click_web_selector(web, ".lapis-lookup-kanji-target", "reviewer kanji target")
+    wait_for_overlay_state(
+        web,
+        label="reviewer",
+        overlay_selector="#lapis-lookup-overlay",
+        view_selector="#kanji-popover-view",
+        description="kanji overlay",
+    )
+
+    mark_review_phase(report_path=report_path, report=report, phase="scroll-with-touch")
+    touch_scroll = simulate_touch_scroll_on_selector(
+        web,
+        ".lapis-lookup-word-row",
+        "#lapis-lookup-overlay",
+    )
+    if not touch_scroll.get("ok"):
+        raise RuntimeError(f"reviewer touch scroll failed: {touch_scroll}")
+    if touch_scroll.get("wordOverlayVisible"):
+        raise RuntimeError("reviewer scroll gesture unexpectedly opened word overlay")
+
+    post_scroll = collect_lookup_snapshot(web)
+    if not post_scroll["overlayVisible"] or not post_scroll["kanjiOverlayVisible"] or post_scroll["wordOverlayVisible"]:
+        raise RuntimeError(f"reviewer overlay state invalid after scroll: {post_scroll}")
+    wait_ms(650)
+
+    mark_review_phase(report_path=report_path, report=report, phase="open-word-overlay")
+    click_web_selector(web, ".lapis-lookup-word-row", "reviewer related word row")
+    wait_for_overlay_state(
+        web,
+        label="reviewer",
+        overlay_selector="#lapis-lookup-overlay",
+        view_selector="#word-popover-view",
+        description="word overlay",
+    )
+
+    word_snapshot = collect_lookup_snapshot(web)
+    assertions = assert_preview(word_snapshot, expression)
+
+    mark_review_phase(report_path=report_path, report=report, phase="back-to-kanji")
+    click_web_selector(web, "#lapis-lookup-word-back", "reviewer word back")
+    wait_for_overlay_state(
+        web,
+        label="reviewer",
+        overlay_selector="#lapis-lookup-overlay",
+        view_selector="#kanji-popover-view",
+        description="kanji overlay after back",
+    )
+
+    reset_snapshot = collect_lookup_snapshot(web)
+    if reset_snapshot["wordOverlayVisible"]:
+        raise RuntimeError("reviewer word overlay still visible after Back")
+    if not reset_snapshot["kanjiOverlayVisible"]:
+        raise RuntimeError("reviewer kanji overlay not visible after Back")
+    if reset_snapshot["overlayScrollTop"] != 0 or reset_snapshot["kanjiBodyScrollTop"] != 0:
+        raise RuntimeError(
+            "reviewer overlay scroll did not reset after Back: "
+            f"overlay={reset_snapshot['overlayScrollTop']} kanjiBody={reset_snapshot['kanjiBodyScrollTop']}"
+        )
+    if reset_snapshot["consoleErrors"] or reset_snapshot["windowErrors"] or reset_snapshot["rejections"]:
+        raise RuntimeError(
+            f"reviewer JS errors detected: "
+            f"{reset_snapshot['consoleErrors']} {reset_snapshot['windowErrors']} {reset_snapshot['rejections']}"
+        )
+
+    return {
+        "expression": expression,
+        "touchScrollAssertions": {
+            "passed": True,
+            "overlayVisibleAfterScroll": post_scroll["overlayVisible"],
+            "kanjiOverlayVisibleAfterScroll": post_scroll["kanjiOverlayVisible"],
+            "wordOverlayVisibleAfterScroll": post_scroll["wordOverlayVisible"],
+            "overlayScrollTopAfterScroll": post_scroll["overlayScrollTop"],
+        },
+        "relatedWordClickAssertions": assertions["relatedWordClickAssertions"],
+        "backNavigationAssertions": {
+            "passed": True,
+            "overlayScrollTop": reset_snapshot["overlayScrollTop"],
+            "kanjiBodyScrollTop": reset_snapshot["kanjiBodyScrollTop"],
+            "wordOverlayVisible": reset_snapshot["wordOverlayVisible"],
+            "kanjiOverlayVisible": reset_snapshot["kanjiOverlayVisible"],
         },
     }
 

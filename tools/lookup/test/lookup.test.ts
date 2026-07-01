@@ -238,15 +238,27 @@ describe("related word definition rendering", () => {
             backTemplate,
             /title\.innerHTML = renderLookupRubyHtml\(relatedWord\.term, relatedWord\.reading\);/,
         );
+        assert.match(backTemplate, /const touchMoveThreshold = 10;/);
+        assert.match(backTemplate, /if \(touchMoved\) return;/);
+        assert.match(
+            backTemplate,
+            /function resetLookupScrollState\(activeSheet\)/,
+        );
+        assert.match(backTemplate, /resetLookupScrollState\(activeSheet\);/);
         assert.doesNotMatch(backTemplate, /lapis-lookup-word-reading/);
         assert.doesNotMatch(
             backTemplate,
             /subtitleParts\.push\(relatedWord\.reading\)/,
         );
         assert.match(backTemplate, /id="lapis-lookup-kanji-components"/);
+        assert.match(css, /\.lapis-lookup-overlay \{\n {2}position: fixed;/);
         assert.match(
             css,
             /\.lapis-lookup-word-term \{\n {2}font-family: var\(--font-serif\);\n {2}font-size: calc\(var\(--back-vocab-font-size\) \* 0\.8\);/,
+        );
+        assert.doesNotMatch(
+            css,
+            /\.lapis-lookup-overlay \{\n {2}position: absolute;/,
         );
         assert.match(
             css,
