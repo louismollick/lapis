@@ -289,7 +289,7 @@ def start_auto_backfill_if_idle(col: Any | None = None) -> None:
             lookup_items=lookup_items,
             success=on_auto_backfill_lookup_success,
             failure=on_auto_backfill_lookup_failure,
-            progress_label="Preparing Lapis lookup...",
+            progress_label=None,
         )
     except Exception:
         AUTO_BACKFILL_QUEUE.pending_note_ids = note_ids + AUTO_BACKFILL_QUEUE.pending_note_ids
@@ -309,17 +309,16 @@ def collect_pending_auto_backfill_note_ids(col: Any) -> list[int]:
 def on_auto_backfill_lookup_success(results: dict[str, Any]) -> None:
     try:
         summary = apply_backfill_results(mw.col, results)
-    except Exception as error:
-        showWarning(f"Lapis lookup auto-backfill failed.\n{error}", parent=mw)
-    else:
         if summary.failed or summary.invariant_violations:
-            showWarning(format_backfill_failure_report(summary), parent=mw)
+            report_auto_backfill_issue(format_backfill_failure_report(summary))
+    except Exception as error:
+        report_auto_backfill_issue(f"Lapis lookup auto-backfill failed.\n{error}")
     finally:
         start_auto_backfill_next_batch()
 
 
 def on_auto_backfill_lookup_failure(error: Exception) -> None:
-    showWarning(f"Lapis lookup auto-backfill failed.\n{error}", parent=mw)
+    report_auto_backfill_issue(f"Lapis lookup auto-backfill failed.\n{error}")
     start_auto_backfill_next_batch()
 
 
@@ -333,7 +332,7 @@ def start_lookup_job(
     parent: Any,
     lookup_items: Sequence[dict[str, Any]],
     success: Any,
-    progress_label: str,
+    progress_label: str | None,
     failure: Any | None = None,
 ) -> None:
     if not lookup_items:
@@ -346,7 +345,13 @@ def start_lookup_job(
     )
     if failure is not None:
         op = op.failure(failure)
-    op.with_progress(progress_label).run_in_background()
+    if progress_label:
+        op = op.with_progress(progress_label)
+    op.run_in_background()
+
+
+def report_auto_backfill_issue(message: str) -> None:
+    print(message)
 
 
 def apply_backfill_item(col: Any, item: dict[str, Any], state: BackfillState) -> BackfillSummary:

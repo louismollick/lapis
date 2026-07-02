@@ -446,6 +446,7 @@ class AutoBackfillTest(unittest.TestCase):
         self.assertEqual(addon.AUTO_BACKFILL_QUEUE.pending_note_ids, [])
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["lookup_items"], [{"noteId": 101, "mode": addon.LOOKUP_ONLY_MODE, "expression": "超人"}])
+        self.assertIsNone(calls[0]["progress_label"])
 
     def test_auto_backfill_queues_note_added_while_run_active(self) -> None:
         addon = load_addon()
@@ -566,6 +567,21 @@ class AutoBackfillTest(unittest.TestCase):
         synced_model = col.models.get(col.notes[101].mid)
         self.assertEqual(synced_model["tmpls"][0]["qfmt"], addon.FRONT_TEMPLATE)
         self.assertIn('"version":2', col.notes[101][addon.LOOKUP_FIELD_NAME])
+
+    def test_auto_backfill_failure_reports_without_warning_prompt(self) -> None:
+        addon = load_addon()
+        calls: list[str] = []
+        original_report = addon.report_auto_backfill_issue
+        original_show_warning = addon.showWarning
+        addon.report_auto_backfill_issue = lambda message: calls.append(message)
+        addon.showWarning = lambda *_args, **_kwargs: self.fail("showWarning should not run for auto-backfill")
+        try:
+            addon.on_auto_backfill_lookup_failure(RuntimeError("boom"))
+        finally:
+            addon.report_auto_backfill_issue = original_report
+            addon.showWarning = original_show_warning
+
+        self.assertEqual(calls, ["Lapis lookup auto-backfill failed.\nboom"])
 
 
 class FakeCollection:
