@@ -48,44 +48,6 @@ NOTE_SCENARIOS: dict[str, dict[str, Any]] = {
             "FreqSort": "100",
             "MiscInfo": "Fixture Lapis note",
         },
-        "generated_fields": None,
-        "payload": {
-            "version": 2,
-            "expression": "粒子",
-            "kanji": [
-                {"char": "粒", "wordRefs": ["粒子", "微粒子"], "components": ["米", "立"]},
-                {"char": "子", "wordRefs": ["粒子"], "components": ["了", "一"]},
-            ],
-        },
-        "shared_terms": {
-            "粒子": {
-                "term": "粒子",
-                "reading": "りゅうし",
-                "frequency": {"value": 100, "source": "JPDB"},
-                "entryHtml": (
-                    '<div class="yomitan-glossary"><ol>'
-                    '<li data-dictionary="FixtureDict"><span>particle</span></li>'
-                    "</ol></div>"
-                ),
-            },
-            "微粒子": {
-                "term": "微粒子",
-                "reading": "びりゅうし",
-                "frequency": {"value": 240, "source": "JPDB"},
-                "entryHtml": (
-                    '<div class="yomitan-glossary"><ol>'
-                    '<li data-dictionary="FixtureDict"><span>fine particle</span></li>'
-                    "</ol></div>"
-                ),
-            },
-        },
-        "expected": {
-            "clicked_kanji": "粒",
-            "components": ["米", "立"],
-            "related_rows": 2,
-            "frequency_source": "JPDB",
-            "first_related_term": "粒子",
-        },
     },
     "銀貨": {
         "label": "legacy",
@@ -94,72 +56,6 @@ NOTE_SCENARIOS: dict[str, dict[str, Any]] = {
             "Front": "銀貨",
             "Back": "<div>legacy fixture</div>",
             "Sort": "銀貨",
-        },
-        "generated_fields": {
-            "Expression": "銀貨",
-            "ExpressionFurigana": "銀貨[ぎんか]",
-            "ExpressionReading": "ぎんか",
-            "MainDefinition": (
-                '<div class="yomitan-glossary"><ol>'
-                '<li data-dictionary="FixtureDict"><span>silver coin</span></li>'
-                "</ol></div>"
-            ),
-            "Glossary": (
-                '<div class="yomitan-glossary"><ol>'
-                '<li data-dictionary="FixtureDict"><span>coin made of silver</span></li>'
-                "</ol></div>"
-            ),
-            "Sentence": "古い<b>銀貨</b>が見つかった。",
-            "FreqSort": "200",
-            "Frequency": "<ul><li>JPDB: 200</li></ul>",
-            "MiscInfo": "Fixture legacy note",
-        },
-        "payload": {
-            "version": 2,
-            "expression": "銀貨",
-            "kanji": [
-                {"char": "銀", "wordRefs": ["銀貨", "白銀"], "components": ["金", "艮"]},
-                {"char": "貨", "wordRefs": ["貨幣"], "components": ["化", "貝"]},
-            ],
-        },
-        "shared_terms": {
-            "銀貨": {
-                "term": "銀貨",
-                "reading": "ぎんか",
-                "frequency": {"value": 200, "source": "JPDB"},
-                "entryHtml": (
-                    '<div class="yomitan-glossary"><ol>'
-                    '<li data-dictionary="FixtureDict"><span>silver coin</span></li>'
-                    "</ol></div>"
-                ),
-            },
-            "白銀": {
-                "term": "白銀",
-                "reading": "はくぎん",
-                "frequency": {"value": 310, "source": "JPDB"},
-                "entryHtml": (
-                    '<div class="yomitan-glossary"><ol>'
-                    '<li data-dictionary="FixtureDict"><span>silver</span></li>'
-                    "</ol></div>"
-                ),
-            },
-            "貨幣": {
-                "term": "貨幣",
-                "reading": "かへい",
-                "frequency": {"value": 400, "source": "JPDB"},
-                "entryHtml": (
-                    '<div class="yomitan-glossary"><ol>'
-                    '<li data-dictionary="FixtureDict"><span>currency</span></li>'
-                    "</ol></div>"
-                ),
-            },
-        },
-        "expected": {
-            "clicked_kanji": "銀",
-            "components": ["金", "艮"],
-            "related_rows": 2,
-            "frequency_source": "JPDB",
-            "first_related_term": "銀貨",
         },
     },
 }
@@ -179,31 +75,3 @@ def base_lapis_note_fields() -> dict[str, str]:
 def legacy_note_fields() -> dict[str, str]:
     return deepcopy(NOTE_SCENARIOS["銀貨"]["legacy_fields"])
 
-
-def expected_ui_assertions() -> dict[str, dict[str, Any]]:
-    return {
-        expression: deepcopy(data["expected"])
-        for expression, data in NOTE_SCENARIOS.items()
-    }
-
-
-def build_stub_lookup_results(
-    lookup_addon: Any,
-    lookup_items: list[dict[str, Any]],
-) -> dict[str, Any]:
-    results: list[dict[str, Any]] = []
-    for item in lookup_items:
-        scenario = scenario_for_expression(str(item["expression"]))
-        result = {
-            "noteId": int(item["noteId"]),
-            "mode": item["mode"],
-            "status": "ok",
-            "expression": str(item["expression"]),
-            "payload": deepcopy(scenario["payload"]),
-            "sharedTerms": deepcopy(scenario["shared_terms"]),
-            "warnings": [],
-        }
-        if item["mode"] == lookup_addon.LEGACY_CONVERT_MODE:
-            result["generatedFields"] = deepcopy(scenario["generated_fields"])
-        results.append(result)
-    return {"results": results}

@@ -90,6 +90,7 @@ class TestE2EHarness(unittest.TestCase):
             command,
         )
         self.assertIn("LAPIS_E2E_PREVIEW_ORDER=legacy-first", command)
+        self.assertIn("/workdir/tools/lookup/node_modules", command)
         self.assertIn(f"{artifacts_dir}:/artifacts", command)
 
     def test_parse_args_accepts_preview_order_and_timeout(self) -> None:

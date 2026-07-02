@@ -15,6 +15,11 @@ export const DICTIONARY_CACHE_DIR = path.join(
     ".cache",
     "yomitan-dicts",
 );
+export const DICTIONARY_DATA_DIR = path.join(TOOL_ROOT, "data");
+export const DEFAULT_DICTIONARY_DB_PATH = path.join(
+    DICTIONARY_DATA_DIR,
+    "lapis-yomitan.sqlite",
+);
 
 export const DICTIONARY_ARCHIVES: DictionaryArchiveSpec[] = [
     {

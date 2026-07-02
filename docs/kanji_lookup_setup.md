@@ -87,6 +87,10 @@ On first real backfill run, the addon will:
 2. build the TypeScript tool
 3. download the required dictionary zips into:
    - `/Users/mollicl/personal/lapis/.cache/yomitan-dicts/`
+4. import those dictionaries into:
+   - `/Users/mollicl/personal/lapis/tools/lookup/data/lapis-yomitan.sqlite`
+
+Lookup uses the prepared sqlite database. The zips are bootstrap inputs only.
 
 Downloaded dictionaries:
 
@@ -204,7 +208,7 @@ It is safe to use as a refresh/backfill command for already-enabled notes.
 
 - Lapis-family note types only
 - data can get large because related-word HTML is stored in notes
-- first run can be slow because npm install/build + dictionary download happen automatically
+- first run can be slow because npm install/build + dictionary download + sqlite preparation happen automatically
 - no live search during review; only precomputed drilldown around the card expression
 
 ## Troubleshooting
@@ -222,6 +226,16 @@ Check:
 - `npm -v`
 
 Both must work on your machine.
+
+If the prepared dictionary database is missing, from repo root run:
+
+```bash
+cd tools/lookup
+npm install
+npm run build
+npm run fetch-dictionaries
+npm run prepare-database
+```
 
 ### No related words show up
 
@@ -242,5 +256,6 @@ Edit addon config:
 
 - `definition_dictionary_names`
 - `frequency_dictionary_names`
+- `dictionary_db_path`
 
 These are matched by name fragment, not exact full title.

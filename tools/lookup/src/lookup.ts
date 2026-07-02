@@ -1,6 +1,6 @@
-import "fake-indexeddb/auto";
 import {
     DEFAULT_DEFINITION_DICTIONARY_NAMES,
+    DEFAULT_DICTIONARY_DB_PATH,
     DEFAULT_FREQUENCY_DICTIONARY_NAMES,
     DEFAULT_MAX_WORDS_PER_KANJI,
 } from "./constants.js";
@@ -8,8 +8,7 @@ import {
     buildDictionaryStylesMap,
     buildKanjiDictionaryMap,
     buildTermDictionaryMap,
-    ensureDictionaryArchivesPresent,
-    importSuggestedDictionaries,
+    ensureDictionaryDatabasePresent,
     selectPreferredDictionaryTitle,
     selectPreferredFrequency,
 } from "./dictionaries.js";
@@ -89,8 +88,9 @@ export function createLookupCache(): LookupCache {
 export async function runLookup(
     input: LookupCliInput,
 ): Promise<LookupCliOutput> {
-    await ensureDictionaryArchivesPresent();
-    const runtime = await createRuntime();
+    const databasePath = input.dictionaryDbPath ?? DEFAULT_DICTIONARY_DB_PATH;
+    await ensureDictionaryDatabasePresent(databasePath);
+    const runtime = await createRuntime(databasePath);
 
     try {
         const results: LookupCliResultItem[] = [];
@@ -108,8 +108,9 @@ export async function runLookup(
 export async function* streamLookupResults(
     input: LookupCliInput,
 ): AsyncGenerator<LookupCliStreamItem> {
-    await ensureDictionaryArchivesPresent();
-    const runtime = await createRuntime();
+    const databasePath = input.dictionaryDbPath ?? DEFAULT_DICTIONARY_DB_PATH;
+    await ensureDictionaryDatabasePresent(databasePath);
+    const runtime = await createRuntime(databasePath);
 
     try {
         const options = buildLookupOptions(input);
@@ -148,13 +149,11 @@ function buildLookupOptions(input: LookupCliInput): LookupOptions {
     };
 }
 
-async function createRuntime(): Promise<LookupRuntime> {
-    const core = await createYomitanCore(
-        `lapis-lookup-${Date.now()}-${process.pid}`,
-    );
+async function createRuntime(databasePath: string): Promise<LookupRuntime> {
+    const core = await createYomitanCore(databasePath);
     await core.initialize();
 
-    const dictionaryInfo = await importSuggestedDictionaries(core);
+    const dictionaryInfo = await core.getDictionaryInfo();
     return {
         core,
         dictionaryInfo,
@@ -277,7 +276,11 @@ async function buildKanjiRelatedWords(
     options: LookupOptions,
 ): Promise<CachedValue<LookupKanjiBuild>> {
     const warnings: string[] = [];
-    const relatedData = await getRelatedDataForKanji(character);
+    const relatedData = await getRelatedDataForKanji(
+        character,
+        runtime.core,
+        runtime.kanjiDictionaryMap,
+    );
     const limitedWords = relatedData.relatedWords.slice(
         0,
         options.maxWordsPerKanji,

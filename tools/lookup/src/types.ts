@@ -8,6 +8,7 @@ export type LookupCliInputItem = {
 
 export type LookupCliInput = {
     items: LookupCliInputItem[];
+    dictionaryDbPath?: string;
     maxWordsPerKanji?: number;
     definitionDictionaryNames?: string[];
     frequencyDictionaryNames?: string[];

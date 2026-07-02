@@ -4,6 +4,8 @@
 
 `frequency_dictionary_names`: Preferred dictionary name fragments for picking a frequency value.
 
+`dictionary_db_path`: Optional absolute path to a prepared Yomitan sqlite database. Leave `null` to use `tools/lookup/data/lapis-yomitan.sqlite` inside `lookup_repo_root`.
+
 `max_words_per_kanji`: Max related words to precompute for each kanji.
 
 `lookup_chunk_size`: Number of notes to process per Node/Yomitan worker restart. Lower values use less memory and run slower. Default: `100`.

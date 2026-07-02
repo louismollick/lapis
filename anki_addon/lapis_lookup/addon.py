@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
+import aqt
 from anki import hooks as anki_hooks
 from aqt import gui_hooks, mw
 from aqt.browser import Browser
@@ -728,14 +729,25 @@ def run_lookup_cli(
     tool_root = repo_root / "tools" / "lookup"
     cli_path = tool_root / "dist" / "src" / "cli.js"
     fetch_path = tool_root / "dist" / "scripts" / "fetch-dictionaries.js"
+    prepare_database_path = tool_root / "dist" / "scripts" / "prepare-database.js"
+    dictionary_db_path = resolve_dictionary_db_path(config, tool_root)
+    default_dictionary_db_path = resolve_dictionary_db_path({}, tool_root)
 
-    ensure_node_ready(tool_root, cli_path, fetch_path)
+    ensure_node_ready(
+        tool_root,
+        cli_path,
+        fetch_path,
+        prepare_database_path,
+        dictionary_db_path,
+        default_dictionary_db_path,
+    )
 
     node = resolve_executable("node")
     if not node:
         raise RuntimeError("node was not found on PATH.")
 
     options = {
+        "dictionaryDbPath": str(dictionary_db_path),
         "maxWordsPerKanji": int(config.get("max_words_per_kanji", 12)),
         "definitionDictionaryNames": config.get("definition_dictionary_names", ["Jitendex"]),
         "frequencyDictionaryNames": config.get("frequency_dictionary_names", ["JPDB"]),
@@ -1057,35 +1069,58 @@ def build_lookup_items(note_ids: Sequence[int], col: Any) -> list[dict[str, Any]
     return items
 
 
-def ensure_node_ready(tool_root: Path, cli_path: Path, fetch_path: Path) -> None:
+def resolve_dictionary_db_path(config: dict[str, Any], tool_root: Path) -> Path:
+    configured_path = config.get("dictionary_db_path")
+    if configured_path:
+        return Path(str(configured_path)).expanduser()
+    return tool_root / "data" / "lapis-yomitan.sqlite"
+
+
+def ensure_node_ready(
+    tool_root: Path,
+    cli_path: Path,
+    fetch_path: Path,
+    prepare_database_path: Path,
+    dictionary_db_path: Path,
+    default_dictionary_db_path: Path,
+) -> None:
     node = resolve_executable("node")
     npm = resolve_executable("npm")
     if not node or not npm:
         raise RuntimeError("Both node and npm must be installed and available on PATH.")
 
-    if not cli_path.exists():
+    if not lookup_node_modules_ready(tool_root):
         install_command = [npm, "ci"] if (tool_root / "package-lock.json").exists() else [npm, "install"]
         run_command(install_command, tool_root, node_path=node, npm_path=npm)
+
+    if not cli_path.exists():
         run_command([npm, "run", "build"], tool_root, node_path=node, npm_path=npm)
-    elif needs_tool_rebuild(tool_root, cli_path, fetch_path):
+    elif needs_tool_rebuild(tool_root, cli_path, fetch_path, prepare_database_path):
         run_command([npm, "run", "build"], tool_root, node_path=node, npm_path=npm)
 
-    cache_dir = tool_root.parent.parent / ".cache" / "yomitan-dicts"
-    required_archives = {
-        "jitendex-yomitan.zip",
-        "KANJIDIC_english.zip",
-        "JPDB_v2.2_Frequency_Kana_2024-10-13.zip",
-        "JPDB_Kanji.zip",
-    }
-    if not cache_dir.exists() or any(not (cache_dir / file_name).exists() for file_name in required_archives):
+    if dictionary_db_path.exists():
+        return
+
+    if dictionary_db_path != default_dictionary_db_path:
+        raise RuntimeError(f"Configured dictionary_db_path does not exist: {dictionary_db_path}")
+
+    if not dictionary_db_path.exists():
         if not fetch_path.exists():
             run_command([npm, "run", "build"], tool_root, node_path=node, npm_path=npm)
         run_command([node, str(fetch_path)], tool_root, node_path=node, npm_path=npm)
+        run_command([node, str(prepare_database_path)], tool_root, node_path=node, npm_path=npm)
 
 
-def needs_tool_rebuild(tool_root: Path, cli_path: Path, fetch_path: Path) -> bool:
-    outputs = [path for path in (cli_path, fetch_path) if path.exists()]
-    if len(outputs) < 2:
+def lookup_node_modules_ready(tool_root: Path) -> bool:
+    return (
+        (tool_root / "node_modules" / "yomitan-core").exists()
+        and (tool_root / "node_modules" / "better-sqlite3").exists()
+    )
+
+
+def needs_tool_rebuild(tool_root: Path, cli_path: Path, fetch_path: Path, prepare_database_path: Path) -> bool:
+    outputs = [path for path in (cli_path, fetch_path, prepare_database_path) if path.exists()]
+    if len(outputs) < 3:
         return True
 
     oldest_output_mtime = min(path.stat().st_mtime for path in outputs)
@@ -1172,4 +1207,7 @@ def resolve_executable(name: str) -> str | None:
 
 
 def load_config() -> dict[str, Any]:
-    return mw.addonManager.getConfig(ADDON_NAME) or {}
+    window = mw or getattr(aqt, "mw", None)
+    if window is None:
+        return {}
+    return window.addonManager.getConfig(ADDON_NAME) or {}

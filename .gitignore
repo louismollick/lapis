@@ -1,6 +1,7 @@
 .cache/
 tools/lookup/node_modules/
 tools/lookup/dist/
+tools/lookup/data/*.sqlite*
 .DS_Store
 __pycache__/
 *.log

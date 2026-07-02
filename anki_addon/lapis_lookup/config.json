@@ -6,6 +6,7 @@
   "frequency_dictionary_names": [
     "JPDB"
   ],
+  "dictionary_db_path": null,
   "max_words_per_kanji": 12,
   "lookup_chunk_size": 100,
   "note_timeout_seconds": 90,

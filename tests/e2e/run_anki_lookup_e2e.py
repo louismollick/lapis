@@ -191,6 +191,8 @@ def build_docker_command(
             "-v",
             f"{REPO_ROOT}:/workdir:ro",
             "-v",
+            "/workdir/tools/lookup/node_modules",
+            "-v",
             f"{artifacts_dir}:/artifacts",
             image,
             "python3",

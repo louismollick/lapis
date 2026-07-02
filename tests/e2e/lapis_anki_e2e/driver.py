@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import html
 import os
+import shutil
 import time
 import traceback
 from pathlib import Path
@@ -24,9 +26,6 @@ from lapis_anki_e2e.fixture_data import (
     FIXTURE_DECK_NAME,
     LAPIS_MODEL_NAME,
     LEGACY_MODEL_NAME,
-    build_stub_lookup_results,
-    expected_ui_assertions,
-    scenario_for_expression,
 )
 
 
@@ -192,11 +191,18 @@ def run_harness() -> None:
         lookup_items = lookup_addon.build_lookup_items(note_ids, main_window().col)
         report["lookupItems"] = lookup_items
 
+        report["phase"] = "run-real-lookup"
+        lookup_config = lookup_addon.load_config()
+        lookup_config["lookup_repo_root"] = os.environ["LAPIS_E2E_REPO_ROOT"]
+        lookup_config["dictionary_db_path"] = str(copy_lookup_database_for_e2e(artifacts_dir))
+        lookup_results = lookup_addon.run_lookup_only(lookup_items, lookup_config)
+        report["lookupResults"] = summarize_lookup_results(lookup_results)
+        write_report(report_path, report)
+
         report["phase"] = "apply-backfill-results"
-        stub_results = build_stub_lookup_results(lookup_addon, lookup_items)
-        summary = lookup_addon.apply_backfill_results(main_window().col, stub_results)
+        summary = lookup_addon.apply_backfill_results(main_window().col, lookup_results)
         backfill_items_by_note = {
-            int(item["noteId"]): item for item in stub_results["results"]
+            int(item["noteId"]): item for item in lookup_results["results"]
         }
         report["backfill"] = {
             "processed": summary.processed,
@@ -418,6 +424,15 @@ def import_fixture(fixture_path: Path) -> Any:
     return main_window().col.import_anki_package(request)
 
 
+def copy_lookup_database_for_e2e(artifacts_dir: Path) -> Path:
+    source = Path(os.environ["LAPIS_E2E_REPO_ROOT"]) / "tools" / "lookup" / "data" / "lapis-yomitan.sqlite"
+    destination = artifacts_dir / "lapis-yomitan.sqlite"
+    if not source.exists():
+        raise RuntimeError(f"Prepared lookup database missing: {source}")
+    shutil.copy2(source, destination)
+    return destination
+
+
 def classify_fixture_notes(lookup_addon: Any) -> dict[str, tuple[int, dict[str, Any]]]:
     note_ids = [int(note_id) for note_id in main_window().col.db.list("select id from notes")]
     notes: dict[str, tuple[int, dict[str, str]]] = {}
@@ -465,13 +480,25 @@ def validate_lookup_media(lookup_store: Any, note_ids_by_expression: dict[str, i
     if manifest_path is None or not manifest_path.exists():
         raise RuntimeError("Lookup store manifest was not written.")
 
+    store = lookup_store.read_lookup_store_from_media(main_window().col)
+    stored_terms = set(store.get("terms", {}))
     per_note: dict[str, Any] = {}
     all_missing: list[str] = []
     all_expected_shards: set[str] = set()
 
-    for expression in note_ids_by_expression:
-        scenario = scenario_for_expression(expression)
-        expected_terms = sorted(set(scenario["shared_terms"]) | set(word_ref for item in scenario["payload"]["kanji"] for word_ref in item["wordRefs"]))
+    for expression, note_id in note_ids_by_expression.items():
+        note = main_window().col.get_note(note_id)
+        payload = parse_note_lookup_payload(note)
+        expected_terms = sorted(
+            {
+                str(word_ref)
+                for item in payload.get("kanji", [])
+                for word_ref in item.get("wordRefs", [])
+            }
+        )
+        if not expected_terms:
+            raise RuntimeError(f"{expression}: real lookup produced no related word refs")
+        missing_terms = [term for term in expected_terms if term not in stored_terms]
         expected_shards = sorted(
             {
                 lookup_store.lookup_store_shard_media_name(lookup_store.lookup_term_shard(term))
@@ -488,9 +515,12 @@ def validate_lookup_media(lookup_store: Any, note_ids_by_expression: dict[str, i
         per_note[expression] = {
             "manifestPresent": True,
             "expectedTerms": expected_terms,
+            "missingTerms": missing_terms,
             "expectedShards": expected_shards,
             "missingShards": missing,
         }
+        if missing_terms:
+            raise RuntimeError(f"{expression}: missing lookup store terms: {missing_terms}")
     if all_missing:
         raise RuntimeError(f"Missing lookup store shards: {sorted(set(all_missing))}")
 
@@ -500,6 +530,33 @@ def validate_lookup_media(lookup_store: Any, note_ids_by_expression: dict[str, i
         "expectedShards": sorted(all_expected_shards),
         "missingShards": sorted(set(all_missing)),
         "notes": per_note,
+    }
+
+
+def parse_note_lookup_payload(note: Any) -> dict[str, Any]:
+    raw_payload = str(note["KanjiLookupData"])
+    return json.loads(html.unescape(raw_payload))
+
+
+def summarize_lookup_results(results: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "count": len(results.get("results", [])),
+        "items": [
+            {
+                "noteId": item.get("noteId"),
+                "mode": item.get("mode"),
+                "status": item.get("status"),
+                "expression": item.get("expression"),
+                "kanjiCount": len(item.get("payload", {}).get("kanji", []))
+                if isinstance(item.get("payload"), dict)
+                else 0,
+                "sharedTermCount": len(item.get("sharedTerms", {}))
+                if isinstance(item.get("sharedTerms"), dict)
+                else 0,
+                "warningCount": len(item.get("warnings", [])),
+            }
+            for item in results.get("results", [])
+        ],
     }
 
 
@@ -804,29 +861,16 @@ def install_probe(web: Any) -> None:
 
 
 def assert_preview(snapshot: dict[str, Any], expression: str) -> dict[str, Any]:
-    expected = expected_ui_assertions()[expression]
     if snapshot["targetCount"] < 1:
         raise RuntimeError(f"{expression}: no clickable kanji targets")
-    if snapshot["clickedKanji"] != expected["clicked_kanji"]:
-        raise RuntimeError(
-            f"{expression}: expected kanji {expected['clicked_kanji']}, got {snapshot['clickedKanji']}"
-        )
-    if snapshot["components"] != expected["components"]:
-        raise RuntimeError(
-            f"{expression}: expected components {expected['components']}, got {snapshot['components']}"
-        )
-    if snapshot["relatedRows"] != expected["related_rows"]:
-        raise RuntimeError(
-            f"{expression}: expected {expected['related_rows']} related rows, got {snapshot['relatedRows']}"
-        )
-    if snapshot["frequencySource"] != expected["frequency_source"]:
-        raise RuntimeError(
-            f"{expression}: expected frequency source {expected['frequency_source']}, got {snapshot['frequencySource']}"
-        )
-    if expected["first_related_term"] not in snapshot["wordTitleHtml"]:
-        raise RuntimeError(
-            f"{expression}: expected related term {expected['first_related_term']} in {snapshot['wordTitleHtml']}"
-        )
+    if snapshot["clickedKanji"] not in expression:
+        raise RuntimeError(f"{expression}: clicked kanji not in expression: {snapshot['clickedKanji']}")
+    if snapshot["relatedRows"] < 1:
+        raise RuntimeError(f"{expression}: no related rows")
+    if not snapshot["wordTitleHtml"].strip():
+        raise RuntimeError(f"{expression}: empty related word title")
+    if "yomitan-glossary" not in snapshot["wordBodyHtml"]:
+        raise RuntimeError(f"{expression}: word body did not render real Yomitan glossary")
     if not snapshot["wordBodyHtml"].strip():
         raise RuntimeError(f"{expression}: empty dictionary definition body")
     if snapshot["consoleErrors"] or snapshot["windowErrors"] or snapshot["rejections"]:
@@ -837,20 +881,16 @@ def assert_preview(snapshot: dict[str, Any], expression: str) -> dict[str, Any]:
     return {
         "kanjiClickAssertions": {
             "passed": True,
-            "expectedKanji": expected["clicked_kanji"],
             "actualKanji": snapshot["clickedKanji"],
-            "expectedComponents": expected["components"],
             "actualComponents": snapshot["components"],
         },
         "relatedWordClickAssertions": {
             "passed": True,
-            "expectedRelatedRows": expected["related_rows"],
             "actualRelatedRows": snapshot["relatedRows"],
-            "expectedFrequencySource": expected["frequency_source"],
             "actualFrequencySource": snapshot["frequencySource"],
-            "expectedFirstRelatedTerm": expected["first_related_term"],
             "actualWordTitleHtml": snapshot["wordTitleHtml"],
             "definitionNonEmpty": bool(snapshot["wordBodyHtml"].strip()),
+            "renderedYomitanGlossary": "yomitan-glossary" in snapshot["wordBodyHtml"],
         },
     }
 

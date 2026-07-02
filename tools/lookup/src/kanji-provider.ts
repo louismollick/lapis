@@ -1,29 +1,23 @@
-import { readArchiveText } from "./dictionaries.js";
+import type { KanjiDictionaryEntry, YomitanCoreLike } from "./yomitan-types.js";
 
-const JPDB_KANJI_ARCHIVE = "JPDB_Kanji.zip";
-const JPDB_KANJI_BANK_FILE = "kanji_bank_1.json";
 const KANJI_DECOMPOSITION_MARKER = "漢字分解:";
+const JPDB_DICTIONARY_FRAGMENT = "jpdb";
 
 export type KanjiRelatedData = {
     relatedWords: string[];
     components: string[];
 };
 
-let cachedWordMap: Map<string, KanjiRelatedData> | null = null;
-
 export async function getRelatedDataForKanji(
     character: string,
+    core: YomitanCoreLike,
+    enabledDictionaryMap: Map<string, unknown>,
 ): Promise<KanjiRelatedData> {
-    if (!cachedWordMap) {
-        cachedWordMap = await loadRelatedWordMap();
-    }
-
-    return (
-        cachedWordMap.get(character) ?? {
-            relatedWords: [],
-            components: [],
-        }
-    );
+    const entries = await core.findKanji(character, { enabledDictionaryMap });
+    const entry = selectRelatedDataKanjiEntry(entries);
+    return entry
+        ? parseKanjiRelatedData(entry.definitions)
+        : { relatedWords: [], components: [] };
 }
 
 export function parseKanjiRelatedData(rawItems: unknown[]): KanjiRelatedData {
@@ -58,24 +52,16 @@ export function parseKanjiRelatedData(rawItems: unknown[]): KanjiRelatedData {
     };
 }
 
-async function loadRelatedWordMap(): Promise<Map<string, KanjiRelatedData>> {
-    const jsonText = await readArchiveText(
-        JPDB_KANJI_ARCHIVE,
-        JPDB_KANJI_BANK_FILE,
+function selectRelatedDataKanjiEntry(
+    entries: KanjiDictionaryEntry[],
+): KanjiDictionaryEntry | null {
+    return (
+        entries.find((entry) =>
+            `${entry.dictionary} ${entry.dictionaryAlias}`
+                .toLowerCase()
+                .includes(JPDB_DICTIONARY_FRAGMENT),
+        ) ??
+        entries[0] ??
+        null
     );
-    const rawEntries = JSON.parse(jsonText) as unknown[];
-    const wordMap = new Map<string, KanjiRelatedData>();
-
-    for (const entry of rawEntries) {
-        if (!Array.isArray(entry) || typeof entry[0] !== "string") {
-            continue;
-        }
-
-        const relatedData = Array.isArray(entry[4])
-            ? parseKanjiRelatedData(entry[4])
-            : { relatedWords: [], components: [] };
-        wordMap.set(entry[0], relatedData);
-    }
-
-    return wordMap;
 }

@@ -1,14 +1,10 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import path from "node:path";
-import { promisify } from "node:util";
 import {
     DEFAULT_DEFINITION_DICTIONARY_NAMES,
+    DEFAULT_DICTIONARY_DB_PATH,
     DEFAULT_FREQUENCY_DICTIONARY_NAMES,
-    DICTIONARY_ARCHIVES,
-    DICTIONARY_CACHE_DIR,
 } from "./constants.js";
-import type { DictionarySummary, YomitanCoreLike } from "./yomitan-types.js";
+import type { DictionarySummary } from "./yomitan-types.js";
 
 type EnabledDictionary = {
     index: number;
@@ -19,36 +15,16 @@ type EnabledDictionary = {
     useDeinflections?: boolean;
 };
 
-const execFileAsync = promisify(execFile);
-const ZIP_READ_OPTIONS = {
-    encoding: "utf8" as const,
-    maxBuffer: 32 * 1024 * 1024,
-};
-
-export async function ensureDictionaryArchivesPresent(): Promise<void> {
-    for (const archive of DICTIONARY_ARCHIVES) {
-        const archivePath = path.join(DICTIONARY_CACHE_DIR, archive.fileName);
-        try {
-            await fs.access(archivePath);
-        } catch (_error) {
-            throw new Error(
-                `Missing dictionary archive: ${archive.fileName}. Run "node dist/scripts/fetch-dictionaries.js" in tools/lookup first.`,
-            );
-        }
-    }
-}
-
-export async function importSuggestedDictionaries(
-    core: YomitanCoreLike,
-): Promise<DictionarySummary[]> {
-    for (const archive of DICTIONARY_ARCHIVES) {
-        const archiveBuffer = await fs.readFile(
-            path.join(DICTIONARY_CACHE_DIR, archive.fileName),
+export async function ensureDictionaryDatabasePresent(
+    databasePath = DEFAULT_DICTIONARY_DB_PATH,
+): Promise<void> {
+    try {
+        await fs.access(databasePath);
+    } catch (_error) {
+        throw new Error(
+            `Missing dictionary database: ${databasePath}. Run "npm run build && npm run prepare-database" in tools/lookup first.`,
         );
-        await core.importDictionary(bufferToArrayBuffer(archiveBuffer));
     }
-
-    return core.getDictionaryInfo();
 }
 
 export function buildTermDictionaryMap(
@@ -180,34 +156,6 @@ export function normalizeDictionaryTitle(value: string): string {
     return lowered;
 }
 
-export async function readArchiveText(
-    archiveFileName: string,
-    fileNameInArchive: string,
-): Promise<string> {
-    const unzip = process.platform === "win32" ? "tar" : "unzip";
-    if (process.platform === "win32") {
-        const archivePath = path.join(DICTIONARY_CACHE_DIR, archiveFileName);
-        const { stdout } = await execFileAsync(
-            unzip,
-            ["-xOf", archivePath, fileNameInArchive],
-            ZIP_READ_OPTIONS,
-        );
-        return stdout;
-    }
-
-    const archivePath = path.join(DICTIONARY_CACHE_DIR, archiveFileName);
-    const { stdout } = await execFileAsync(
-        unzip,
-        ["-p", archivePath, fileNameInArchive],
-        ZIP_READ_OPTIONS,
-    );
-    return stdout;
-}
-
 function normalizeFragment(value: string): string {
     return value.trim().toLowerCase();
-}
-
-function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
-    return Uint8Array.from(buffer).buffer;
 }
